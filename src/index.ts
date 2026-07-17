@@ -24,6 +24,7 @@ export type {
   ExecRequest,
   PingRequest,
   PingStatus,
+  PyodideSource,
   WorkerErrorInfo,
   WorkerFailure,
   WorkerRequest,

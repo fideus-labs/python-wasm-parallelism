@@ -9,9 +9,11 @@
  * (bootMs > 0) workers. Tests that need their own pool size use withPool(),
  * which guarantees terminate().
  */
+import path from 'node:path'
+import { pathToFileURL } from 'node:url'
 import { afterAll, beforeAll, expect, it } from 'vitest'
 import { PyodidePool, PyodideTaskError } from '../src/index.js'
-import { createPool, pickleCall, unpickle, withPool } from './helpers.js'
+import { createPool, pickleCall, rootDir, unpickle, withPool } from './helpers.js'
 
 let pool: PyodidePool
 
@@ -196,4 +198,24 @@ it('mapPickled on an empty payload list resolves immediately', async () => {
   const run = pool.mapPickled([])
   expect(run.runId).toBe(-1)
   await expect(run.promise).resolves.toEqual([])
+})
+
+it('boots from an explicit pyodideSource (the browser CDN wiring, via file://)', async () => {
+  // Browsers pass the jsDelivr pyodide.mjs URL + indexURL; the same code
+  // path is exercised here with a file:// module URL into node_modules.
+  const pyodideDir = path.join(rootDir, 'node_modules', 'pyodide')
+  await withPool(
+    1,
+    async (sourced) => {
+      const [warm] = await sourced.warmup()
+      expect(warm?.status.booted).toBe(true)
+      await expect(sourced.runPython<number>('21 * 2')).resolves.toBe(42)
+    },
+    {
+      pyodideSource: {
+        moduleURL: pathToFileURL(path.join(pyodideDir, 'pyodide.mjs')).href,
+        indexURL: pyodideDir,
+      },
+    },
+  )
 })

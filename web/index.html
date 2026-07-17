@@ -1,0 +1,184 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Pyodide Worker Pool — Browser Demo</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        --accent: #3949ab;
+        --ok: #2e7d32;
+        --bad: #c62828;
+        --border: color-mix(in srgb, currentColor 18%, transparent);
+        --muted: color-mix(in srgb, currentColor 55%, transparent);
+      }
+      body {
+        font-family: system-ui, -apple-system, 'Segoe UI', sans-serif;
+        max-width: 52rem;
+        margin: 2rem auto;
+        padding: 0 1rem;
+        line-height: 1.5;
+      }
+      h1 {
+        font-size: 1.35rem;
+        margin-bottom: 0.25rem;
+      }
+      .subtitle {
+        color: var(--muted);
+        margin-top: 0;
+        font-size: 0.9rem;
+      }
+      .badge {
+        display: inline-block;
+        font-size: 0.75rem;
+        font-weight: 600;
+        border-radius: 999px;
+        padding: 0.1rem 0.6rem;
+        border: 1px solid var(--border);
+        vertical-align: middle;
+      }
+      .badge.ok {
+        color: var(--ok);
+        border-color: var(--ok);
+      }
+      .badge.bad {
+        color: var(--bad);
+        border-color: var(--bad);
+      }
+      #status {
+        font-size: 0.9rem;
+        min-height: 1.5em;
+      }
+      #status::before {
+        content: 'status: ';
+        color: var(--muted);
+      }
+      .controls {
+        display: flex;
+        gap: 0.5rem;
+        flex-wrap: wrap;
+        margin: 0.75rem 0;
+      }
+      button {
+        font: inherit;
+        padding: 0.4rem 0.9rem;
+        border-radius: 0.4rem;
+        border: 1px solid var(--accent);
+        background: var(--accent);
+        color: #fff;
+        cursor: pointer;
+      }
+      button:disabled {
+        opacity: 0.45;
+        cursor: not-allowed;
+      }
+      .progress-row {
+        display: flex;
+        align-items: center;
+        gap: 0.6rem;
+        margin: 0.5rem 0 1.25rem;
+      }
+      progress {
+        flex: 1;
+        height: 0.7rem;
+        accent-color: var(--accent);
+      }
+      #progress-text {
+        font-variant-numeric: tabular-nums;
+        font-size: 0.85rem;
+        color: var(--muted);
+        min-width: 4.5rem;
+        text-align: right;
+      }
+      #error {
+        display: none;
+        white-space: pre-wrap;
+        color: var(--bad);
+        border: 1px solid var(--bad);
+        border-radius: 0.4rem;
+        padding: 0.5rem 0.75rem;
+        margin: 0.75rem 0;
+        font-size: 0.85rem;
+        font-family: ui-monospace, monospace;
+      }
+      #error.visible {
+        display: block;
+      }
+      table {
+        border-collapse: collapse;
+        width: 100%;
+        font-size: 0.9rem;
+      }
+      th,
+      td {
+        text-align: left;
+        padding: 0.35rem 0.6rem;
+        border-bottom: 1px solid var(--border);
+        font-variant-numeric: tabular-nums;
+      }
+      th {
+        color: var(--muted);
+        font-weight: 600;
+      }
+      td.ok {
+        color: var(--ok);
+      }
+      td.bad {
+        color: var(--bad);
+      }
+      .hint {
+        color: var(--muted);
+        font-size: 0.8rem;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>
+      Pyodide Worker Pool
+      <span id="isolation" data-testid="isolation" class="badge">crossOriginIsolated: …</span>
+    </h1>
+    <p class="subtitle">
+      Counting primes in [2, 2 000 000) — serial vs a pool of Pyodide Web Workers vs a
+      dask.delayed graph on the pool scheduler.
+    </p>
+
+    <p id="status" data-testid="status">loading…</p>
+
+    <div class="controls">
+      <button id="run-serial" data-testid="run-serial" disabled>Run serial</button>
+      <button id="run-parallel" data-testid="run-parallel" disabled>
+        Run parallel (4 workers)
+      </button>
+      <button id="run-dask" data-testid="run-dask" disabled>Run dask graph</button>
+    </div>
+
+    <div class="progress-row">
+      <progress id="progress" data-testid="progress" value="0" max="1"></progress>
+      <span id="progress-text" data-testid="progress-text">0/0</span>
+    </div>
+
+    <pre id="error" data-testid="error" role="alert"></pre>
+
+    <table data-testid="results">
+      <thead>
+        <tr>
+          <th>Run</th>
+          <th>Workers</th>
+          <th>Wall-clock</th>
+          <th>Primes found</th>
+          <th>Speedup</th>
+          <th>Results equal</th>
+        </tr>
+      </thead>
+      <tbody id="results-body" data-testid="results-body"></tbody>
+    </table>
+    <p class="hint">
+      Speedup is relative to the last serial run (the dask row compares its own synchronous
+      baseline). “Results equal” checks per-chunk counts against the serial baseline and the
+      known value π(2 000 000) = 148 933.
+    </p>
+
+    <script type="module" src="/main.ts"></script>
+  </body>
+</html>

@@ -13,17 +13,39 @@
  * The same ESM bundle (dist/pyodide-worker.js, `pyodide` kept external) runs
  * in browser Web Workers and in Node worker_threads via the `web-worker`
  * polyfill, which emulates WorkerGlobalScope (`self`, `postMessage`,
- * `addEventListener`) around this module. In Node, `loadPyodide()` resolves
- * the WASM assets from node_modules/pyodide.
+ * `addEventListener`) around this module. Where `loadPyodide` comes from is
+ * decided per request via {@link PyodideSource}: by default the bare
+ * `pyodide` import (Node resolves the WASM assets from node_modules);
+ * browser embedders pass a CDN module URL instead, because bare specifiers
+ * do not resolve inside browser workers and node_modules is not served.
  */
-import { loadPyodide } from 'pyodide'
 import type { PyodideAPI } from 'pyodide'
+
+/**
+ * Where the worker obtains `loadPyodide` and the Pyodide runtime assets.
+ *
+ * The interpreter boots once per worker and is reused afterwards, so only
+ * the source on the request that triggers the boot takes effect; the field
+ * is ignored on requests that hit an already-booted interpreter. Pools
+ * therefore attach the same source to every request they send.
+ */
+export interface PyodideSource {
+  /**
+   * ES module URL exporting `loadPyodide` (e.g. the jsDelivr CDN's
+   * `pyodide.mjs`). Omitted, the worker imports the bare `pyodide` package.
+   */
+  moduleURL?: string
+  /** Base URL of the runtime assets, passed to loadPyodide as `indexURL`. */
+  indexURL?: string
+}
 
 /** Run Python source; the value of the final expression becomes `result`. */
 export interface ExecRequest {
   id: number
   kind: 'exec'
   code: string
+  /** Where to obtain Pyodide if this request triggers the boot. */
+  pyodide?: PyodideSource
   /**
    * Structured-clone-safe values deep-converted (`pyodide.toPy`) into the
    * execution namespace before the code runs.
@@ -61,6 +83,8 @@ export interface ExecPickledRequest {
    * snapshot on every message cheap and idempotent.
    */
   wheels: string[]
+  /** Where to obtain Pyodide if this request triggers the boot. */
+  pyodide?: PyodideSource
 }
 
 /** Interpreter status probe; `boot: true` forces the boot (pool warmup). */
@@ -68,6 +92,8 @@ export interface PingRequest {
   id: number
   kind: 'ping'
   boot?: boolean
+  /** Where to obtain Pyodide if this request triggers the boot. */
+  pyodide?: PyodideSource
 }
 
 export type WorkerRequest = ExecRequest | ExecPickledRequest | PingRequest
@@ -142,20 +168,41 @@ const now = (): number => performance.now()
 
 let pyodidePromise: Promise<PyodideAPI> | null = null
 
-async function ensurePyodide(): Promise<{ py: PyodideAPI; bootMs: number }> {
+/** Shape of the `pyodide` package / CDN `pyodide.mjs` module. */
+interface PyodideModule {
+  loadPyodide(options?: {
+    indexURL?: string
+    stdout?: (line: string) => void
+    stderr?: (line: string) => void
+  }): Promise<PyodideAPI>
+}
+
+async function importPyodideModule(source: PyodideSource | undefined): Promise<PyodideModule> {
+  if (source?.moduleURL !== undefined) {
+    // @vite-ignore keeps bundlers from trying to resolve the runtime URL.
+    return (await import(/* @vite-ignore */ source.moduleURL)) as PyodideModule
+  }
+  return import('pyodide')
+}
+
+async function ensurePyodide(source?: PyodideSource): Promise<{ py: PyodideAPI; bootMs: number }> {
   if (pyodidePromise !== null) {
     return { py: await pyodidePromise, bootMs: 0 }
   }
   const started = now()
-  // Node worker_threads have no process.stdout.fd, so Pyodide's default
-  // Node stdout/stderr device throws on every Python-level write (e.g.
-  // micropip's internal "Loading ..." messages while mirroring packages).
-  // console.log/error are wired up correctly in worker_threads and browser
-  // workers alike.
-  pyodidePromise = loadPyodide({
-    stdout: (line) => console.log(line),
-    stderr: (line) => console.error(line),
-  })
+  pyodidePromise = (async () => {
+    const { loadPyodide } = await importPyodideModule(source)
+    // Node worker_threads have no process.stdout.fd, so Pyodide's default
+    // Node stdout/stderr device throws on every Python-level write (e.g.
+    // micropip's internal "Loading ..." messages while mirroring packages).
+    // console.log/error are wired up correctly in worker_threads and browser
+    // workers alike.
+    return loadPyodide({
+      ...(source?.indexURL === undefined ? {} : { indexURL: source.indexURL }),
+      stdout: (line) => console.log(line),
+      stderr: (line) => console.error(line),
+    })
+  })()
   try {
     const py = await pyodidePromise
     return { py, bootMs: now() - started }
@@ -326,7 +373,7 @@ function toCloneSafe(py: PyodideAPI, value: unknown): unknown {
 }
 
 async function handleExec(request: ExecRequest): Promise<WorkerResponse> {
-  const { py, bootMs } = await ensurePyodide()
+  const { py, bootMs } = await ensurePyodide(request.pyodide)
   if (request.packages !== undefined && request.packages.length > 0) {
     await ensurePackages(py, request.packages)
   }
@@ -351,7 +398,7 @@ async function handleExec(request: ExecRequest): Promise<WorkerResponse> {
 }
 
 async function handleExecPickled(request: ExecPickledRequest): Promise<ExecPickledResponse> {
-  const { py, bootMs } = await ensurePyodide()
+  const { py, bootMs } = await ensurePyodide(request.pyodide)
   if (request.packages.length > 0) {
     await ensurePackages(py, request.packages)
   }
@@ -386,7 +433,7 @@ async function handleExecPickled(request: ExecPickledRequest): Promise<ExecPickl
 async function handlePing(request: PingRequest): Promise<WorkerResponse<PingStatus>> {
   let bootMs = 0
   if (request.boot === true) {
-    ;({ bootMs } = await ensurePyodide())
+    ;({ bootMs } = await ensurePyodide(request.pyodide))
   }
   const py = pyodidePromise === null ? null : await pyodidePromise
   return {

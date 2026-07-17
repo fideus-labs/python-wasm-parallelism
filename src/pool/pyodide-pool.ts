@@ -23,7 +23,9 @@ import type {
   ExecPickledRequest,
   ExecPickledResponse,
   ExecRequest,
+  PingRequest,
   PingStatus,
+  PyodideSource,
   WorkerErrorInfo,
   WorkerFailure,
   WorkerRequest,
@@ -47,6 +49,14 @@ export interface PyodidePoolOptions {
    * before every exec, and preloaded during {@link PyodidePool.warmup}.
    */
   packages?: string[]
+  /**
+   * Where workers obtain `loadPyodide` and the runtime assets, attached to
+   * every request (a worker boots on its first). Omitted, workers import the
+   * bare `pyodide` package — correct in Node, where it resolves from
+   * node_modules. Browser embedders must pass a CDN (or same-origin) module
+   * URL and matching `indexURL` instead.
+   */
+  pyodideSource?: PyodideSource
 }
 
 /** Options for {@link PyodidePool.runPython}. */
@@ -180,6 +190,7 @@ export class PyodidePool {
   private readonly pool: WorkerPool
   private readonly workerUrl: string | URL
   private readonly packages: string[]
+  private readonly pyodideSource: PyodideSource | undefined
   /** Workers that fired an 'error' event; replaced instead of reused. */
   private readonly deadWorkers = new WeakSet<Worker>()
   private nextMessageId = 1
@@ -189,8 +200,11 @@ export class PyodidePool {
       throw new RangeError(`poolSize must be a positive integer, got ${String(options.poolSize)}`)
     }
     this.poolSize = options.poolSize
-    this.workerUrl = options.workerUrl ?? new URL('pyodide-worker.js', import.meta.url)
+    // @vite-ignore: the default resolves next to the BUILT dist/index.js at
+    // runtime; browser bundles always pass an explicit workerUrl instead.
+    this.workerUrl = options.workerUrl ?? new URL(/* @vite-ignore */ 'pyodide-worker.js', import.meta.url)
     this.packages = options.packages ?? []
+    this.pyodideSource = options.pyodideSource
     this.pool = new WorkerPool(options.poolSize)
   }
 
@@ -294,7 +308,7 @@ export class PyodidePool {
       { length: this.poolSize },
       (): WorkerPoolTask<WorkerResponse<PingStatus>> => {
         if (this.packages.length === 0) {
-          const request: WorkerRequest = { id: this.nextMessageId++, kind: 'ping', boot: true }
+          const request = this.pingRequest(true)
           return async (worker) => {
             const { worker: target, response } = await this.exchange<WorkerResponse<PingStatus>>(
               worker,
@@ -306,7 +320,7 @@ export class PyodidePool {
         // With packages configured, warm up via a no-op exec (which boots
         // AND preloads), then probe the resulting status with a plain ping.
         const execRequest = this.execRequest('None', undefined, undefined)
-        const pingRequest: WorkerRequest = { id: this.nextMessageId++, kind: 'ping' }
+        const pingRequest = this.pingRequest(false)
         return async (worker) => {
           const exec = await this.exchange<WorkerResponse<unknown>>(worker, execRequest)
           if (!exec.response.ok) {
@@ -346,17 +360,27 @@ export class PyodidePool {
     if (globals !== undefined) request.globals = globals
     const merged = [...new Set([...this.packages, ...(packages ?? [])])]
     if (merged.length > 0) request.packages = merged
+    if (this.pyodideSource !== undefined) request.pyodide = this.pyodideSource
     return request
   }
 
   private execPickledRequest(payload: ArrayBuffer, options: RunPickledOptions): ExecPickledRequest {
-    return {
+    const request: ExecPickledRequest = {
       id: this.nextMessageId++,
       kind: 'execPickled',
       payload,
       packages: [...new Set([...this.packages, ...(options.packages ?? [])])],
       wheels: [...new Set(options.wheels ?? [])],
     }
+    if (this.pyodideSource !== undefined) request.pyodide = this.pyodideSource
+    return request
+  }
+
+  private pingRequest(boot: boolean): PingRequest {
+    const request: PingRequest = { id: this.nextMessageId++, kind: 'ping' }
+    if (boot) request.boot = true
+    if (this.pyodideSource !== undefined) request.pyodide = this.pyodideSource
+    return request
   }
 
   /**
