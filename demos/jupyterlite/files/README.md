@@ -9,8 +9,8 @@ Requirements (provided by the bundled `serve:lite` server):
 - Cross-origin isolation (COOP/COEP headers) for `SharedArrayBuffer`
 - A browser that supports workers spawning nested workers
 
-Notebooks (added in later phases):
+Notebooks (run them top to bottom; each is self-contained):
 
-- `01-pool-basics.ipynb` — pool creation, `submit`, `map`, serial vs parallel timing
-- `02-dask-parallel.ipynb` — `dask.delayed` / `dask.bag` graphs computed on the pool
-- `03-benchmark.ipynb` — parameterized workers × workload benchmark with charts
+- `01-pool-basics.ipynb` — pool creation, `submit`, parallel map, serial vs parallel timing
+- `02-dask-parallel.ipynb` — `dask.delayed` / `dask.bag` graphs computed on the pool, package mirroring
+- `03-benchmark.ipynb` — parameterized workers × workload benchmark with a results table and speedup chart
