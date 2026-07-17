@@ -40,7 +40,7 @@ from ._bridge import (
 )
 from ._packages import EXCLUDED_FROM_MIRROR, PackageSnapshot, snapshot_packages
 
-__version__ = "0.1.0"
+__version__ = "0.1.1"
 
 __all__ = [
     "EXCLUDED_FROM_MIRROR",

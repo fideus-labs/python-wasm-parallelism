@@ -29,10 +29,44 @@ from ._bridge import WorkerPool
 
 __all__ = ["DEFAULT_JS_URL", "create_pool"]
 
-#: Where the JupyterLite site serves the bundle when hosted at the domain
-#: root (scripts/serve-lite.mjs serves ``_output`` that way). Deployments
-#: under a sub-path must pass ``js_url`` explicitly.
-DEFAULT_JS_URL = "/files/assets/pyodide-pool.browser.js"
+#: Where the JupyterLite site serves the bundle, as a path RELATIVE to the
+#: deployment's base URL (``files/`` holds the site contents). It is resolved
+#: against the base URL derived from the kernel worker's ``location`` (see
+#: :data:`_IMPORT_JS`), so the default works whether the site is hosted at the
+#: origin root (scripts/serve-lite.mjs) or under a sub-path such as GitHub
+#: Pages (``/<repo>/``) — no explicit ``js_url`` needed either way.
+DEFAULT_JS_URL = "files/assets/pyodide-pool.browser.js"
+
+# JS that dynamically ``import()``s the browser bundle. Two wrinkles make a
+# plain ``import(url)`` wrong inside JupyterLite's Pyodide kernel:
+#   * ``import()`` resolves relative/path-absolute URLs against the REFERRER
+#     module — here pyodide.asm.js, loaded from the jsDelivr CDN — so a
+#     site-relative path would 404 on the CDN rather than the site.
+#   * A path-absolute ``/files/...`` resolved against the page origin drops
+#     any deployment sub-path, so GitHub Pages (``/<repo>/``) 404s on
+#     ``origin/files/...`` — the original symptom this bootstrap fixes.
+# The kernel worker is served from ``<baseUrl>extensions/.../<name>.worker.js``
+# (jupyterlite-pyodide-kernel's ``initWorker``), so everything up to the slash
+# before ``extensions/`` is the deployment base URL. Resolve the base-relative
+# bundle URL against that, falling back to the origin root. A fully-qualified
+# URL (http:, https:, file:, blob:, data:) and Node (no global ``location``)
+# are imported as given.
+_IMPORT_JS = r"""
+(async (u) => {
+  if (typeof location === 'undefined') return import(u);
+  if (/^[a-z][a-z0-9+.\-]*:/i.test(u)) return import(u);
+  const here = location.href;
+  const rel = u.replace(/^\/+/, '');
+  const ext = here.indexOf('/extensions/');
+  const base = ext === -1 ? new URL('/', here).href : here.slice(0, ext + 1);
+  const candidates = [...new Set([new URL(rel, base).href, new URL('/' + rel, here).href])];
+  let lastErr;
+  for (const c of candidates) {
+    try { return await import(c); } catch (e) { lastErr = e; }
+  }
+  throw lastErr;
+})
+""".strip()
 
 
 async def create_pool(pool_size: int = 4, js_url: str | None = None) -> WorkerPool:
@@ -44,24 +78,21 @@ async def create_pool(pool_size: int = 4, js_url: str | None = None) -> WorkerPo
         Maximum number of concurrent workers, one Pyodide interpreter each.
     js_url:
         URL of the self-contained browser bundle, defaulting to
-        :data:`DEFAULT_JS_URL`. Anything the JS ``import()`` accepts in the
-        current context works: an absolute path, a full URL, or a ``file://``
-        URL under Node.
+        :data:`DEFAULT_JS_URL`. A base-relative path (``files/...``) is
+        resolved against the JupyterLite deployment base URL; a full URL
+        (``http(s)://``, or a ``file://`` URL under Node) is used as-is.
     """
     from js import Object
     from pyodide.code import run_js
     from pyodide.ffi import to_js
 
     url = DEFAULT_JS_URL if js_url is None else js_url
-    # Dynamic import() resolves relative and path-absolute URLs against the
-    # REFERRER MODULE (pyodide.asm.js) — in JupyterLite that is the jsDelivr
-    # CDN, so "/files/assets/..." would 404 on cdn.jsdelivr.net. Resolve
-    # against the worker/page location instead, which is the site origin.
-    # Fully-qualified URLs (http://, file://) pass through new URL() as-is,
-    # and Node (no global `location`) keeps the raw url.
-    module = await run_js(
-        f"(u => import(typeof location === 'undefined' ? u : new URL(u, location.href).href))({url!r})"
-    )
+    # Resolve and import the bundle against the deployment base URL; see
+    # _IMPORT_JS for why a plain import() / path-absolute URL is wrong here.
+    # repr(url) yields a JS-safe string literal (matching the old f-string's
+    # {url!r}); build the call by concatenation so the JS body's braces are
+    # not read as Python format fields.
+    module = await run_js(_IMPORT_JS + "(" + repr(url) + ")")
     options = to_js({"poolSize": pool_size}, dict_converter=Object.fromEntries)
     pool = WorkerPool(module.createPool(options))
     _bridge.set_default_pool(pool)
