@@ -3,3 +3,4 @@ dist/
 .venv/
 test-results/
 _output/
+bench/results/node-smoke*

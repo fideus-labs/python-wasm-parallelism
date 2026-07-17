@@ -10,6 +10,8 @@
     "typecheck": "tsc --noEmit",
     "demo:node": "npm run build && tsx examples/node-demo.ts",
     "demo:dask": "npm run build && tsx examples/node-dask-demo.ts",
+    "bench": "tsx bench/run-bench.ts",
+    "bench:report": "tsx bench/run-bench.ts --report-only",
     "test": "vitest run"
   },
   "dependencies": {
