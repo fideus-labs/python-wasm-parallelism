@@ -5,16 +5,18 @@ workers: worker-executed code travels inside cloudpickle payloads (the
 package is registered pickle-by-value in ``__init__``), so workers never
 import this package and it is never installed there.
 
-``submit`` is the single choke point between driver Python and the pool:
-cloudpickle the ``(func, args, kwargs)`` call triple, hand the bytes to the
-JS pool's ``runPickled`` as a transferable buffer together with the current
+``submit`` (one call over ``runPickled``) and ``submit_batch`` (many calls
+as one ``mapPickled`` run) are the only choke points between driver Python
+and the pool: cloudpickle each ``(func, args, kwargs)`` call triple, hand
+the bytes to the JS pool as transferable buffers together with the current
 package snapshot, await the JS promise (directly awaitable on Pyodide's
-event loop), and unpickle the result — or re-raise the remote exception
+event loop), and unpickle the results — or re-raise the remote exception
 with its original traceback attached.
 """
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import Any, NoReturn
 
 import cloudpickle
@@ -24,6 +26,7 @@ from pyodide.ffi import JsException, to_js
 from ._packages import snapshot_packages
 
 __all__ = [
+    "BatchRun",
     "RemoteExecutionError",
     "RemoteTraceback",
     "WorkerPool",
@@ -31,6 +34,9 @@ __all__ = [
     "set_default_pool",
     "submit",
 ]
+
+#: One driver call shipped to a worker: ``(func, args, kwargs)``.
+Call = tuple[Any, tuple[Any, ...], dict[str, Any]]
 
 
 class RemoteTraceback(Exception):
@@ -111,6 +117,40 @@ def _raise_remote(exc: JsException) -> NoReturn:
     raise RemoteExecutionError(message, remote_traceback=formatted) from exc
 
 
+class BatchRun:
+    """Driver-side handle over one JS ``mapPickled`` run.
+
+    Returned by :meth:`WorkerPool.start_batch` so callers (the Phase 06
+    multiprocessing shim's ``terminate``) can cancel queued-not-started
+    payloads while the run is in flight; plain callers use
+    :meth:`WorkerPool.submit_batch` and never see this class.
+    """
+
+    def __init__(self, js_run: Any) -> None:
+        self._js_run = js_run
+
+    @property
+    def run_id(self) -> int:
+        """worker-pool run id; ``-1`` for an empty batch (nothing to cancel)."""
+        return int(self._js_run.runId)
+
+    def cancel(self) -> None:
+        """Cancel payloads not yet started; :meth:`results` then raises the
+        worker-pool cancellation error. In-flight payloads finish."""
+        self._js_run.cancel()
+
+    async def results(self) -> list[Any]:
+        """Await the whole run; unpickled results in input order. A failed
+        payload re-raises its original remote exception — ``mapPickled``
+        rejects with the first failure once the run settles, matching stdlib
+        ``Pool.map`` surfacing one exception."""
+        try:
+            buffers = await self._js_run.promise
+        except JsException as exc:
+            _raise_remote(exc)
+        return [cloudpickle.loads(_to_py_bytes(buffer)) for buffer in buffers]
+
+
 class WorkerPool:
     """Thin Python handle over the JS ``PyodidePool``.
 
@@ -144,6 +184,27 @@ class WorkerPool:
         except JsException as exc:
             _raise_remote(exc)
         return cloudpickle.loads(_to_py_bytes(result))
+
+    def start_batch(self, calls: Sequence[Call]) -> BatchRun:
+        """Dispatch ``calls`` as ONE JS ``mapPickled`` run and return its
+        handle without awaiting.
+
+        One run means one FIFO queue, input-order results, and one
+        ``cancel`` handle for the whole batch, at one task message per call
+        — the batching substrate of the multiprocessing shim's ``chunksize``.
+        """
+        payloads = [_to_js_buffer(cloudpickle.dumps(call)) for call in calls]
+        packages, wheels = snapshot_packages()
+        options = to_js(
+            {"packages": packages, "wheels": wheels},
+            dict_converter=Object.fromEntries,
+        )
+        return BatchRun(self._js_pool.mapPickled(to_js(payloads), options))
+
+    async def submit_batch(self, calls: Sequence[Call]) -> list[Any]:
+        """Run every ``(func, args, kwargs)`` triple on the pool as one
+        batched run; return the results in input order."""
+        return await self.start_batch(calls).results()
 
     def terminate(self) -> None:
         """Terminate idle workers; the pool stays usable (next task re-boots)."""

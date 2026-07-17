@@ -1,0 +1,21 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "wasm-multiprocessing"
+description = "multiprocessing.Pool-compatible API over a pool of Pyodide Web Workers (driver-side shim)"
+license = "MIT"
+requires-python = ">=3.11"
+# pyodide-pool is the single choke point for cloudpickle + JS bridging
+# (_bridge.submit / submit_batch); the shim adds no second copy — it only
+# needs cloudpickle itself for the pickle-by-value registration. pyodide-pool
+# is not on PyPI: install both wheels together (JupyterLite ships both).
+dependencies = ["pyodide-pool", "cloudpickle"]
+dynamic = ["version"]
+
+[tool.hatch.version]
+path = "wasm_multiprocessing/__init__.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["wasm_multiprocessing"]
