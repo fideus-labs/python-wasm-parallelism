@@ -1,0 +1,62 @@
+# Build the JupyterLite site (demos/jupyterlite) and publish it to GitHub
+# Pages. The published site needs no special headers: the worker pool is
+# postMessage-based (no SharedArrayBuffer), so it runs fine without
+# cross-origin isolation — see docs/research/pyodide-parallelism.md.
+#
+# Landing page for the SciPy lightning talk:
+#   https://<owner>.github.io/<repo>/lab/index.html?path=00-scipy-lightning.ipynb
+name: Deploy JupyterLite to GitHub Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - uses: astral-sh/setup-uv@v5
+
+      - name: Install JupyterLite build tooling
+        # Pinned to the versions the site is developed against; the build
+        # script invokes it as .venv/bin/jupyter (see package.json build:lite).
+        run: |
+          uv venv .venv
+          uv pip install jupyterlite-core==0.8.1 jupyterlite-pyodide-kernel==0.8.2
+
+      - name: Install npm dependencies
+        run: npm ci
+
+      - name: Build the JupyterLite site
+        run: npm run build:lite
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: demos/jupyterlite/_output
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

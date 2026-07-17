@@ -9,11 +9,16 @@
 //      -> demos/jupyterlite/files/wheels/ (installed by the notebooks'
 //      first piplite cell; wasm_multiprocessing depends on pyodide_pool,
 //      which is not on PyPI, so the notebooks install the pool wheel first)
+//   3. the same wheels -> demos/jupyterlite/pypi/, where `jupyter lite build`
+//      indexes them into a local piplite index — so notebooks can
+//      `%pip install pyodide-pool` by NAME, which resolves correctly even
+//      when the site is hosted under a subpath (GitHub Pages), unlike the
+//      root-absolute /files/wheels/ URLs.
 //
-// Both output directories are generated (gitignored); this script is the
+// All output directories are generated (gitignored); this script is the
 // only writer.
 import { execFileSync } from 'node:child_process'
-import { copyFileSync, mkdirSync, rmSync } from 'node:fs'
+import { copyFileSync, mkdirSync, readdirSync, rmSync } from 'node:fs'
 import path from 'node:path'
 import { buildBrowserBundle, rootDir } from './bundles.mjs'
 
@@ -48,3 +53,11 @@ try {
 // uv drops a catch-all .gitignore into --out-dir; the repo ignores the wheel
 // dir itself, and the stray file would otherwise ship into the built site.
 rmSync(path.join(wheelsDir, '.gitignore'), { force: true })
+
+const pypiDir = path.join(rootDir, 'demos', 'jupyterlite', 'pypi')
+mkdirSync(pypiDir, { recursive: true })
+for (const name of readdirSync(wheelsDir)) {
+  if (!name.endsWith('.whl')) continue
+  copyFileSync(path.join(wheelsDir, name), path.join(pypiDir, name))
+}
+console.log('copied wheels -> demos/jupyterlite/pypi/ (piplite local index)')

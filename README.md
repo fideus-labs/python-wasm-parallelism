@@ -70,7 +70,7 @@ within 4% of each other; per-task floor ~0.7 ms + ~10 ms/MiB of payload;
 | `python/wasm_multiprocessing/` | The `multiprocessing.Pool` shim (own pure-Python wheel, depends on `pyodide-pool`) |
 | `examples/` | Node demos: raw pool (`demo:node`), dask scheduler (`demo:dask`) |
 | `web/` | Vite browser demo (COOP/COEP dev server, `window.__demo` hook) |
-| `demos/jupyterlite/` | JupyterLite site: 4 notebooks + wheels, kernel spawns the pool as nested workers |
+| `demos/jupyterlite/` | JupyterLite site: 5 notebooks + wheels + the Minnesota-lakes dataset, kernel spawns the pool as nested workers; deployed to GitHub Pages by `.github/workflows/deploy-pages.yml` |
 | `tests/` | Vitest suites (pool, worker, bundle, driver Python, dask, loader, multiprocessing) |
 | `e2e/` | Playwright: browser demo specs, JupyterLite smoke tests, `@bench` benchmark spec |
 | `bench/` | Node benchmark harness + report generators (writes `docs/benchmarks/`) |
@@ -124,9 +124,18 @@ const counts = await pool.map(PRIME_SNIPPET, chunks).promise
 ```
 
 For JupyterLite, run `npm run build:lite && npm run serve:lite` and open
-http://localhost:8000/lab/index.html — the four notebooks
-(`01-pool-basics`, `02-dask-parallel`, `03-benchmark`,
-`04-multiprocessing`) are self-contained, run top to bottom.
+http://localhost:8000/lab/index.html — the five notebooks
+(`00-scipy-lightning`, `01-pool-basics`, `02-dask-parallel`,
+`03-benchmark`, `04-multiprocessing`) are self-contained, run top to
+bottom. `00-scipy-lightning.ipynb` is a 3-minute SciPy lightning-talk
+demo: it maps the density of all 13,462 Minnesota lakes (10+ acres, DNR
+Hydrography — regenerate the CSV with `uv run
+scripts/make-mn-lakes-data.py`) via a billion-evaluation Gaussian KDE as
+a dask graph, serial vs pool. Pushing `main` deploys the built site to
+GitHub Pages (`.github/workflows/deploy-pages.yml`); the pool is
+postMessage-based, so it needs no COOP/COEP headers there. Once Pages is
+enabled, the talk URL is
+`https://<owner>.github.io/<repo>/lab/index.html?path=00-scipy-lightning.ipynb`.
 
 ## Documentation map
 

@@ -189,6 +189,17 @@ async function runNotebookToMarker(
   expect(consoleErrors).toEqual([])
 }
 
+test('00-scipy-lightning.ipynb: Run All Cells prints SCIPY_DEMO_OK with no errors', async ({
+  page,
+  consoleErrors,
+}) => {
+  // The marker cell asserts the pool run beat dask's synchronous scheduler
+  // on the lake-density KDE graph and prints the speedup — so marker
+  // presence covers the piplite index install, the data fetch, both timed
+  // runs, and the three matplotlib figures.
+  await runNotebookToMarker(page, consoleErrors, '00-scipy-lightning.ipynb', 'SCIPY_DEMO_OK')
+})
+
 test('01-pool-basics.ipynb: Run All Cells prints POOL_DEMO_OK with no errors', async ({
   page,
   consoleErrors,

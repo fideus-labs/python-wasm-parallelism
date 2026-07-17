@@ -1,11 +1,11 @@
 // Static server for the built JupyterLite site (demos/jupyterlite/_output).
 //
-// JupyterLite's own `jupyter lite serve` does not send COOP/COEP headers,
-// but the worker pool needs the page cross-origin isolated: SharedArrayBuffer
-// (used by @fideus-labs/worker-pool and Pyodide's pthread support) and
-// nested-worker spawning inside the Pyodide kernel worker both require it.
-// The header values mirror vite.config.ts so the JupyterLite demo runs under
-// the same isolation regime as the Vite demo (web/).
+// JupyterLite's own `jupyter lite serve` does not send COOP/COEP headers.
+// The worker pool itself is postMessage-based and runs fine without them
+// (that is how the GitHub Pages deployment serves this site), but sending
+// them lights up SharedArrayBuffer paths — the JupyterLite kernel's faster
+// coincident transport — and mirrors vite.config.ts so the JupyterLite demo
+// runs under the same isolation regime as the Vite demo (web/).
 //
 // Usage: node scripts/serve-lite.mjs [--port <n>]   (or PORT env var)
 import { createServer } from 'node:http'

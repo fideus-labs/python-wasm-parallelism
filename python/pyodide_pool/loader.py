@@ -13,9 +13,13 @@ spawn as NESTED Web Workers from a Blob URL inlined in the bundle — and
 install the Python :class:`WorkerPool` wrapper as the default pool, so
 ``pyodide_pool.submit``/``compute`` work with no further setup.
 
-Environment requirements: a cross-origin-isolated page (COOP/COEP headers,
-see scripts/serve-lite.mjs) and nested-worker support (all Chromium-based
-browsers; Firefox and Safari in current versions).
+Environment requirements: nested-worker support (all Chromium-based
+browsers; Firefox and Safari in current versions) and network access to
+the Pyodide CDN. The pool is postMessage-based, so it does NOT need a
+cross-origin-isolated page — it runs on plain static hosts like GitHub
+Pages (verified by the Pages deployment of demos/jupyterlite). COOP/COEP
+headers (scripts/serve-lite.mjs sends them) only add SharedArrayBuffer
+extras such as the JupyterLite kernel's coincident transport.
 """
 
 from __future__ import annotations
