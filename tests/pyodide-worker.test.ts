@@ -1,15 +1,14 @@
 /**
  * Integration tests for the Pyodide worker message protocol.
  *
- * Bundles src/worker/pyodide-worker.ts exactly like scripts/build.mjs, then
- * drives the real bundle inside Node worker_threads through the `web-worker`
- * polyfill — the same runtime path PyodidePool uses. Tests within this file
- * run sequentially and share one booted worker; boot-sensitive tests
- * (unbooted ping, first-exec boot, warmup ping) are ordered accordingly.
+ * Drives the real bundle (built by tests/helpers.ts exactly like
+ * scripts/build.mjs) inside Node worker_threads through the `web-worker`
+ * polyfill — the same runtime path PyodidePool uses. The raw request/
+ * response plumbing is deliberately local to this file: exercising the
+ * protocol without PyodidePool is the point. Tests within this file run
+ * sequentially and share one booted worker; boot-sensitive tests (unbooted
+ * ping, first-exec boot, warmup ping) are ordered accordingly.
  */
-import path from 'node:path'
-import { fileURLToPath, pathToFileURL } from 'node:url'
-import { build } from 'esbuild'
 import Worker from 'web-worker'
 import { afterAll, beforeAll, expect, it } from 'vitest'
 import type {
@@ -20,9 +19,7 @@ import type {
   WorkerResponse,
   WorkerSuccess,
 } from '../src/worker/pyodide-worker.js'
-
-const rootDir = fileURLToPath(new URL('..', import.meta.url))
-const workerFile = path.join(rootDir, 'dist', 'pyodide-worker.js')
+import { buildWorkerBundle } from './helpers.js'
 
 let worker: Worker
 let nextId = 1
@@ -47,19 +44,7 @@ function expectOk<T>(response: WorkerResponse<T>): WorkerSuccess<T> {
 }
 
 beforeAll(async () => {
-  // Same options as scripts/build.mjs for the worker bundle; built directly so
-  // the test does not depend on src/index.ts (created by a later task).
-  await build({
-    bundle: true,
-    format: 'esm',
-    platform: 'neutral',
-    target: 'es2022',
-    entryPoints: [path.join(rootDir, 'src', 'worker', 'pyodide-worker.ts')],
-    outfile: workerFile,
-    external: ['pyodide'],
-    logLevel: 'silent',
-  })
-  worker = new Worker(pathToFileURL(workerFile), { type: 'module' })
+  worker = new Worker(await buildWorkerBundle(), { type: 'module' })
 })
 
 afterAll(() => {
@@ -164,7 +149,7 @@ it('ping after boot reports status and Pyodide version', async () => {
 })
 
 it('ping with boot: true boots a fresh worker (pool warmup path)', async () => {
-  const fresh = new Worker(pathToFileURL(workerFile), { type: 'module' })
+  const fresh = new Worker(await buildWorkerBundle(), { type: 'module' })
   try {
     const response = expectOk(
       await request<PingStatus>(fresh, { id: nextId++, kind: 'ping', boot: true }),

@@ -5,7 +5,8 @@ import { defineConfig } from 'vitest/config'
 // would treat vitest's own worker threads as a worker-side scope. Pyodide also
 // boots real interpreters (~seconds each), hence the generous timeouts.
 // fileParallelism: false — every test file esbuilds the same
-// dist/pyodide-worker.js in beforeAll; concurrent files would race on it.
+// dist/pyodide-worker.js at startup (tests/helpers.ts buildWorkerBundle or a
+// local beforeAll); concurrent files would race on the shared outfile.
 export default defineConfig({
   test: {
     pool: 'forks',

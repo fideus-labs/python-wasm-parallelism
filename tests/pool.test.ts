@@ -1,35 +1,22 @@
 /**
  * Integration tests for PyodidePool over the real worker bundle.
  *
- * Builds dist/pyodide-worker.js exactly like scripts/build.mjs, then drives
- * a real 2-worker pool in Node — the environment-aware factory resolves the
- * `web-worker` polyfill because Node has no global Worker. One pool is
- * shared across tests to amortize interpreter boots; the warmup test runs
- * first because it asserts on fresh (bootMs > 0) workers.
+ * tests/helpers.ts builds dist/pyodide-worker.js exactly like
+ * scripts/build.mjs; this suite then drives a real 2-worker pool in Node —
+ * the environment-aware factory resolves the `web-worker` polyfill because
+ * Node has no global Worker. One pool is shared across tests to amortize
+ * interpreter boots; the warmup test runs first because it asserts on fresh
+ * (bootMs > 0) workers. Tests that need their own pool size use withPool(),
+ * which guarantees terminate().
  */
-import path from 'node:path'
-import { fileURLToPath, pathToFileURL } from 'node:url'
-import { build } from 'esbuild'
 import { afterAll, beforeAll, expect, it } from 'vitest'
 import { PyodidePool, PyodideTaskError } from '../src/index.js'
-
-const rootDir = fileURLToPath(new URL('..', import.meta.url))
-const workerFile = path.join(rootDir, 'dist', 'pyodide-worker.js')
+import { createPool, pickleCall, unpickle, withPool } from './helpers.js'
 
 let pool: PyodidePool
 
 beforeAll(async () => {
-  await build({
-    bundle: true,
-    format: 'esm',
-    platform: 'neutral',
-    target: 'es2022',
-    entryPoints: [path.join(rootDir, 'src', 'worker', 'pyodide-worker.ts')],
-    outfile: workerFile,
-    external: ['pyodide'],
-    logLevel: 'silent',
-  })
-  pool = new PyodidePool({ poolSize: 2, workerUrl: pathToFileURL(workerFile) })
+  pool = await createPool(2)
 })
 
 afterAll(() => {
@@ -41,7 +28,7 @@ it('rejects invalid pool sizes', () => {
   expect(() => new PyodidePool({ poolSize: 1.5 })).toThrow(RangeError)
 })
 
-it('warmup boots poolSize interpreters in parallel', async () => {
+it('warmup boots exactly poolSize interpreters in parallel (ping status)', async () => {
   const results = await pool.warmup()
   expect(results).toHaveLength(2)
   for (const result of results) {
@@ -53,6 +40,16 @@ it('warmup boots poolSize interpreters in parallel', async () => {
 
 it('runPython returns the final expression value', async () => {
   await expect(pool.runPython<number>('sum(range(10))')).resolves.toBe(45)
+})
+
+it('runPython returns scalar, list, and dict results', async () => {
+  await expect(pool.runPython<number>('7 / 2')).resolves.toBe(3.5)
+  await expect(pool.runPython<string>("'-'.join(['a', 'b'])")).resolves.toBe('a-b')
+  await expect(pool.runPython<boolean>('10 > 3')).resolves.toBe(true)
+  await expect(pool.runPython<number[]>('[x * x for x in range(4)]')).resolves.toEqual([0, 1, 4, 9])
+  await expect(
+    pool.runPython("{'name': 'pool', 'sizes': [1, 2], 'flags': {'warm': True}}"),
+  ).resolves.toEqual({ name: 'pool', sizes: [1, 2], flags: { warm: true } })
 })
 
 it('runPython injects globals', async () => {
@@ -71,7 +68,7 @@ it('pool keeps serving after a failed task (worker was recycled, not lost)', asy
   await expect(pool.runPython<number>('40 + 2')).resolves.toBe(42)
 })
 
-it('map with a string template injects item and index, ordered results', async () => {
+it('map over N > poolSize items returns ordered results (template injects item and index)', async () => {
   const run = pool.map<number, number>('item * 10 + index', [5, 6, 7, 8])
   await expect(run.promise).resolves.toEqual([50, 61, 72, 83])
 })
@@ -121,6 +118,26 @@ it('distributes concurrent tasks across distinct interpreters', async () => {
   expect(new Set(markers).size).toBe(2)
 })
 
+it('recycles the booted interpreter on a size-1 pool instead of re-booting', async () => {
+  await withPool(1, async (single) => {
+    const [boot] = await single.warmup()
+    expect(boot?.bootMs).toBeGreaterThan(0) // the fresh worker paid the boot
+
+    // Task 1 stamps the interpreter; task 2 reads the stamp back — the
+    // second task ran on the same recycled interpreter, not a fresh one.
+    await single.runPython("import sys\nsys._recycle_probe = 'alive'\nNone")
+    await expect(
+      single.runPython<string>("import sys\ngetattr(sys, '_recycle_probe', 'missing')"),
+    ).resolves.toBe('alive')
+
+    // And no task re-booted it: a ping-backed warmup on the recycled worker
+    // reports a bootMs of exactly 0.
+    const [recycled] = await single.warmup()
+    expect(recycled?.bootMs).toBe(0)
+    expect(recycled?.status.booted).toBe(true)
+  })
+})
+
 it('cancel rejects the map promise with the worker-pool message', async () => {
   const run = pool.map<number>('item', [1, 2, 3, 4, 5, 6, 7, 8])
   run.cancel()
@@ -128,45 +145,33 @@ it('cancel rejects the map promise with the worker-pool message', async () => {
 })
 
 // --- runPickled / mapPickled ----------------------------------------------
-// Payloads are built and results decoded via runPython on the same pool (as
-// lists of ints — always structured-clone-safe), so the tests stay
-// independent of any host-side pickle implementation.
-
-async function pickleCall(expr: string): Promise<ArrayBuffer> {
-  const bytes = await pool.runPython<number[]>(
-    `import cloudpickle\nlist(cloudpickle.dumps(${expr}))`,
-    { packages: ['cloudpickle'] },
-  )
-  return new Uint8Array(bytes).buffer
-}
-
-async function unpickle<T>(payload: ArrayBuffer): Promise<T> {
-  return pool.runPython<T>('import cloudpickle\ncloudpickle.loads(bytes(data))', {
-    globals: { data: Array.from(new Uint8Array(payload)) },
-    packages: ['cloudpickle'],
-  })
-}
+// Payloads are built and decoded via the pickleCall/unpickle helpers, which
+// run cloudpickle on the pool itself — the tests stay independent of any
+// host-side pickle implementation.
 
 it('runPickled executes a cloudpickled call and returns pickled result bytes', async () => {
-  const payload = await pickleCall('((lambda a, b: a + b), (20, 22), {})')
+  const payload = await pickleCall(pool, '((lambda a, b: a + b), (20, 22), {})')
   const result = await pool.runPickled(payload)
   expect(result).toBeInstanceOf(ArrayBuffer)
-  await expect(unpickle<number>(result)).resolves.toBe(42)
+  await expect(unpickle<number>(pool, result)).resolves.toBe(42)
 })
 
 it('runPickled rejects with PyodideTaskError carrying traceback and pickled exception', async () => {
-  const payload = await pickleCall('((lambda: [][5]), (), {})')
+  const payload = await pickleCall(pool, '((lambda: [][5]), (), {})')
   const error = await pool.runPickled(payload).catch((err: unknown) => err)
   expect(error).toBeInstanceOf(PyodideTaskError)
   const taskError = error as PyodideTaskError
   expect(taskError.message).toContain('IndexError')
   expect(taskError.pythonTraceback).toContain('IndexError')
   expect(taskError.exceptionPayload).toBeInstanceOf(ArrayBuffer)
+  await expect(
+    unpickle<string>(pool, taskError.exceptionPayload as ArrayBuffer, 'type(obj).__name__'),
+  ).resolves.toBe('IndexError')
 })
 
 it('mapPickled preserves input order and reports progress', async () => {
   const payloads = await Promise.all(
-    [1, 2, 3].map((n) => pickleCall(`((lambda x: x * x), (${n},), {})`)),
+    [1, 2, 3].map((n) => pickleCall(pool, `((lambda x: x * x), (${n},), {})`)),
   )
   const calls: Array<[number, number]> = []
   const run = pool.mapPickled(payloads, {
@@ -177,7 +182,7 @@ it('mapPickled preserves input order and reports progress', async () => {
   const results = await run.promise
   const values: number[] = []
   for (const result of results) {
-    values.push(await unpickle<number>(result))
+    values.push(await unpickle<number>(pool, result))
   }
   expect(values).toEqual([1, 4, 9])
   expect(calls).toEqual([

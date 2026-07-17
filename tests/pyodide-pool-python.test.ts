@@ -201,7 +201,7 @@ it('mirrors numpy to workers automatically; snapshot replay is idempotent', asyn
   const numpyPool = new PyodidePool({ poolSize: 1, workerUrl: pathToFileURL(workerFile) })
   try {
     const [fresh] = await numpyPool.warmup()
-    expect(fresh.status.loadedPackages).not.toContain('numpy')
+    expect(fresh?.status.loadedPackages).not.toContain('numpy')
 
     await driver.loadPackage('numpy', { messageCallback: () => {} })
     driver.registerJsModule('js_numpy_pool', { pool: numpyPool })
@@ -270,7 +270,7 @@ json.dumps({
     // The ndarray round-trip proves numpy works on the worker; the worker's
     // own interpreter status proves it was installed THERE, not just locally.
     const [after] = await numpyPool.warmup()
-    expect(after.status.loadedPackages).toContain('numpy')
+    expect(after?.status.loadedPackages).toContain('numpy')
   } finally {
     numpyPool.terminate()
   }

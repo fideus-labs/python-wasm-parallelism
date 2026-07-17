@@ -1,0 +1,32 @@
+# Phase 03: Node.js Test Suite and Benchmarks
+
+This phase hardens the Phase 01–02 code with a Vitest suite covering the pool, the worker protocol, the dask scheduler, and package mirroring, then adds a repeatable benchmark harness that quantifies serial-vs-parallel performance across worker counts and workload types, publishing results as a structured markdown report.
+
+## Tasks
+
+- [x] Set up Vitest and write the pool/worker test suite. First read the existing source (`src/pool/pyodide-pool.ts`, `src/worker/pyodide-worker.ts`) and reuse the demo's setup helpers rather than duplicating boot code — extract shared test fixtures into `tests/helpers.ts` (e.g. a `withPool(size, fn)` helper that guarantees `terminate()`). Configure `vitest.config.ts` with a generous `testTimeout` (Pyodide boots take seconds) and a `test` npm script. Create `tests/pool.test.ts`:
+  - `runPython` returns correct scalar, list, and dict results
+  - Python exceptions propagate with the Python traceback text in the error
+  - `map` over N > poolSize items returns ordered, correct results
+  - Worker recycling: run two sequential tasks on a size-1 pool and assert the second task's reported `bootMs` is ~0 (interpreter reused, not re-booted)
+  - Progress callback fires for each completed task; `cancel(runId)` rejects the batch promise
+  - `warmup()` boots exactly `poolSize` interpreters (verify via `ping` status)
+
+  > **Done (2026-07-17).** Vitest + `npm test` and pool/worker suites already existed from Phases 01–02, so this task consolidated instead of duplicating: extracted shared fixtures into `tests/helpers.ts` (`buildWorkerBundle()` memoized esbuild of the worker bundle, `createPool()`, `withPool(size, fn)` with guaranteed `terminate()`, pool-side `pickleCall`/`unpickle`), renamed `tests/pyodide-pool.test.ts` → `tests/pool.test.ts` (git mv) and refactored it plus `tests/pyodide-worker.test.ts` onto the fixtures. Added the missing named cases: pool-level scalar/list/dict results, and size-1 worker recycling asserting `bootMs === 0` via a ping-backed `warmup()` plus a `sys` marker probe. Also added `tests` to tsconfig `include` (typecheck now covers the suite; fixed two `noUncheckedIndexedAccess` nits in `tests/pyodide-pool-python.test.ts`). All six required behaviors covered; `tests/pool.test.ts` + `tests/pyodide-worker.test.ts` = 33 tests, green twice in a row. `tests/pyodide-scheduler.test.ts` / `tests/pyodide-pool-python.test.ts` were left for the next task, which should migrate their duplicated esbuild `beforeAll` blocks onto `tests/helpers.ts`.
+
+- [ ] Write the dask scheduler and package-mirroring test suite in `tests/dask-scheduler.test.ts` (driver Pyodide in the Node main thread, as in `examples/node-dask-demo.ts` — reuse that bootstrapping via a shared fixture in `tests/helpers.ts`):
+  - Correctness: for several graph shapes (independent leaves + reduction, a diamond dependency, nested delayed calls, `dask.bag` map/filter/sum), assert `pyodide_pool.compute(...)` equals `dask.compute(..., scheduler='synchronous')`
+  - Literal graph values and zero-task graphs resolve without error
+  - A task that raises in a worker surfaces the original exception type and traceback in the driver
+  - Package mirroring: a numpy-using delayed task returns the correct result; a second numpy task on the same pool completes faster than the first (install replay is idempotent/cached)
+  - Concurrency bound: with poolSize 2 and 6 ready tasks, peak in-flight tasks never exceeds 2 (instrument via progress events or worker ping status)
+
+- [ ] Run `npm test` and fix all failures. Iterate on source code and tests until the whole suite is green twice in a row (guard against flaky timing assertions — prefer structural assertions like `bootMs` over wall-clock deltas where possible). Do not weaken correctness assertions to make tests pass; fix the underlying code.
+
+- [ ] Build the benchmark harness `bench/run-bench.ts` wired to `npm run bench` (plain script with `performance.now()` timing and warmup runs — keep it dependency-light rather than adding a bench framework):
+  - Workloads: (a) pure-Python prime counting (CPU-bound, from Phase 01), (b) Monte Carlo pi estimation (random-heavy pure Python), (c) numpy batch matmul (tests mirrored-package + serialization overhead), (d) a dask.delayed reduction graph via the Phase 02 scheduler
+  - Matrix: serial baseline (warmed size-1 pool) vs pool sizes 2, 4, and 8 (cap at `os.availableParallelism()`), fixed total work per workload, 3 repetitions reporting median
+  - Also measure and report overheads separately: per-worker Pyodide boot time, per-task round-trip latency for a no-op task, and cloudpickle payload round-trip time for a 1 MB numpy array
+  - The script writes machine-readable results to `bench/results/node-<iso-date>.json` and regenerates the human report (next task) from that JSON
+
+- [ ] Run `npm run bench` to completion and generate `docs/benchmarks/node-benchmarks.md` from the results JSON: front matter (`type: report`, `title: Node.js Benchmarks`, `created` date, tags `[benchmark, node, pyodide]`), wiki-links `[[phase-02-results]]` and `[[browser-benchmarks]]` (forward link, file comes in Phase 04), a table per workload (rows: serial/2/4/8 workers; columns: median wall-clock, speedup, efficiency), the overhead measurements, hardware/Node/Pyodide version context, and a short prose analysis of where speedup saturates and why (boot amortization, serialization overhead, core count).
