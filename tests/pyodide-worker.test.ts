@@ -13,6 +13,8 @@ import { build } from 'esbuild'
 import Worker from 'web-worker'
 import { afterAll, beforeAll, expect, it } from 'vitest'
 import type {
+  ExecPickledRequest,
+  ExecPickledResponse,
   PingStatus,
   WorkerRequest,
   WorkerResponse,
@@ -173,4 +175,116 @@ it('ping with boot: true boots a fresh worker (pool warmup path)', async () => {
   } finally {
     fresh.terminate()
   }
+})
+
+// --- execPickled protocol -------------------------------------------------
+// Payloads are built and results decoded through exec requests on the same
+// worker (as a list of ints — always structured-clone-safe), so the tests
+// stay independent of any host-side pickle implementation.
+
+function requestPickled(target: Worker, message: ExecPickledRequest): Promise<ExecPickledResponse> {
+  return new Promise((resolve) => {
+    const onMessage = (event: MessageEvent) => {
+      const response = event.data as ExecPickledResponse
+      if (typeof response === 'object' && response !== null && response.id === message.id) {
+        target.removeEventListener('message', onMessage)
+        resolve(response)
+      }
+    }
+    target.addEventListener('message', onMessage)
+    target.postMessage(message, [message.payload])
+  })
+}
+
+async function pickleCall(expr: string): Promise<ArrayBuffer> {
+  const response = expectOk(
+    await request<number[]>(worker, {
+      id: nextId++,
+      kind: 'exec',
+      code: `import cloudpickle\nlist(cloudpickle.dumps(${expr}))`,
+      packages: ['cloudpickle'],
+    }),
+  )
+  return new Uint8Array(response.result).buffer
+}
+
+async function unpickle<T>(payload: ArrayBuffer, expr = 'obj'): Promise<T> {
+  const response = expectOk(
+    await request<T>(worker, {
+      id: nextId++,
+      kind: 'exec',
+      code: `import cloudpickle\nobj = cloudpickle.loads(bytes(data))\n${expr}`,
+      globals: { data: Array.from(new Uint8Array(payload)) },
+      packages: ['cloudpickle'],
+    }),
+  )
+  return response.result
+}
+
+it('execPickled runs a cloudpickled call with args and kwargs', async () => {
+  const payload = await pickleCall("(sorted, ([3, 1, 2],), {'reverse': True})")
+  const response = await requestPickled(worker, {
+    id: nextId++,
+    kind: 'execPickled',
+    payload,
+    packages: [],
+    wheels: [],
+  })
+  if (!response.ok) throw new Error(`Expected ok response, got: ${response.error.message}`)
+  expect(response.payload).toBeInstanceOf(ArrayBuffer)
+  expect(response.bootMs).toBe(0) // interpreter reused from earlier tests
+  await expect(unpickle(response.payload)).resolves.toEqual([3, 2, 1])
+})
+
+it('execPickled ships lambdas by value (cloudpickle, not pickle)', async () => {
+  const payload = await pickleCall('((lambda a, b: a * b), (6, 7), {})')
+  const response = await requestPickled(worker, {
+    id: nextId++,
+    kind: 'execPickled',
+    payload,
+    packages: [],
+    wheels: [],
+  })
+  if (!response.ok) throw new Error(`Expected ok response, got: ${response.error.message}`)
+  await expect(unpickle(response.payload)).resolves.toBe(42)
+})
+
+it('execPickled failures carry the traceback and a pickled exception', async () => {
+  const payload = await pickleCall('((lambda: 1 / 0), (), {})')
+  const response = await requestPickled(worker, {
+    id: nextId++,
+    kind: 'execPickled',
+    payload,
+    packages: [],
+    wheels: [],
+  })
+  expect(response.ok).toBe(false)
+  if (response.ok) return
+  expect(response.error.message).toContain('ZeroDivisionError')
+  expect(response.error.pythonTraceback).toContain('Traceback')
+  expect(response.error.pythonTraceback).toContain('ZeroDivisionError')
+  expect(response.error.exceptionPayload).toBeInstanceOf(ArrayBuffer)
+  const typeName = await unpickle<string>(
+    response.error.exceptionPayload as ArrayBuffer,
+    'type(obj).__name__',
+  )
+  expect(typeName).toBe('ZeroDivisionError')
+  // The worker must survive a failed pickled task: same interpreter answers.
+  const followUp = expectOk(
+    await request<number>(worker, { id: nextId++, kind: 'exec', code: '1 + 1' }),
+  )
+  expect(followUp.result).toBe(2)
+  expect(followUp.bootMs).toBe(0)
+})
+
+it('rejects execPickled requests without a payload buffer', async () => {
+  const response = await request(worker, {
+    id: nextId++,
+    kind: 'execPickled',
+    packages: [],
+    wheels: [],
+  } as unknown as WorkerRequest)
+  expect(response.ok).toBe(false)
+  if (response.ok) return
+  expect(response.error.message).toContain('Malformed request')
 })

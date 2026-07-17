@@ -10,12 +10,17 @@
 export { PyodidePool, PyodideTaskError } from './pool/pyodide-pool.js'
 export type {
   MapOptions,
+  MapPickledOptions,
   PyodideMapRun,
   PyodidePoolOptions,
+  RunPickledOptions,
   RunPythonOptions,
   WarmupResult,
 } from './pool/pyodide-pool.js'
 export type {
+  ExecPickledRequest,
+  ExecPickledResponse,
+  ExecPickledSuccess,
   ExecRequest,
   PingRequest,
   PingStatus,

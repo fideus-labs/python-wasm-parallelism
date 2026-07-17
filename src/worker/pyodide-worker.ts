@@ -36,6 +36,33 @@ export interface ExecRequest {
   packages?: string[]
 }
 
+/**
+ * Run one cloudpickled call: `payload` is `cloudpickle.dumps((func, args,
+ * kwargs))`. The call executes through a fixed Python shim (unpickle ->
+ * call -> repickle) and the result posts back as cloudpickled bytes,
+ * bypassing `exec`'s structured-clone conversion chain so arbitrary
+ * picklable Python objects round-trip. Payload buffers ride the postMessage
+ * transfer list in both directions (moved, not copied).
+ */
+export interface ExecPickledRequest {
+  id: number
+  kind: 'execPickled'
+  /** cloudpickle.dumps((func, args, kwargs)) — detached from the sender. */
+  payload: ArrayBuffer
+  /**
+   * Packages mirrored from the driver instance, ensured loaded before the
+   * call runs: `pyodide.loadPackage` (distribution) first, micropip (PyPI
+   * wheels) as fallback.
+   */
+  packages: string[]
+  /**
+   * micropip targets (PyPI names or wheel URLs) mirrored from the driver.
+   * A module-scope record of installed targets makes replaying the same
+   * snapshot on every message cheap and idempotent.
+   */
+  wheels: string[]
+}
+
 /** Interpreter status probe; `boot: true` forces the boot (pool warmup). */
 export interface PingRequest {
   id: number
@@ -43,7 +70,7 @@ export interface PingRequest {
   boot?: boolean
 }
 
-export type WorkerRequest = ExecRequest | PingRequest
+export type WorkerRequest = ExecRequest | ExecPickledRequest | PingRequest
 
 /** `result` of a ping — interpreter status after the ping was handled. */
 export interface PingStatus {
@@ -57,6 +84,12 @@ export interface WorkerErrorInfo {
   stack?: string
   /** Full Python traceback when the failure came from Python code. */
   pythonTraceback?: string
+  /**
+   * `cloudpickle.dumps(exception)` when an `execPickled` task raised and the
+   * exception object was picklable — lets the driver re-raise the original
+   * exception. Transferred, not cloned.
+   */
+  exceptionPayload?: ArrayBuffer
 }
 
 export interface WorkerSuccess<T = unknown> {
@@ -77,6 +110,20 @@ export interface WorkerFailure {
 
 export type WorkerResponse<T = unknown> = WorkerSuccess<T> | WorkerFailure
 
+/** Success response to an {@link ExecPickledRequest}. */
+export interface ExecPickledSuccess {
+  id: number
+  ok: true
+  /** cloudpickle.dumps(result) — transferred, not cloned. */
+  payload: ArrayBuffer
+  /** Time booting Pyodide for this request; 0 when the interpreter was reused. */
+  bootMs: number
+  /** Time unpickling + executing the call (excludes boot and package loading). */
+  execMs: number
+}
+
+export type ExecPickledResponse = ExecPickledSuccess | WorkerFailure
+
 type PyProxy = InstanceType<PyodideAPI['ffi']['PyProxy']>
 type PyDictProxy = PyProxy & {
   get(key: string): any
@@ -87,7 +134,7 @@ type PyDictProxy = PyProxy & {
 // DOM-vs-WebWorker lib skew and matches web-worker's Node shim exactly.
 interface WorkerScope {
   addEventListener(type: 'message', listener: (event: { data: unknown }) => void): void
-  postMessage(message: unknown): void
+  postMessage(message: unknown, transfer?: Transferable[]): void
 }
 const scope = globalThis as unknown as WorkerScope
 
@@ -150,6 +197,98 @@ async function ensurePackages(py: PyodideAPI, packages: string[]): Promise<void>
 }
 
 /**
+ * micropip targets already installed by this worker. `pyodide.loadedPackages`
+ * records installs by package name only, so URL-form wheel targets need
+ * their own record for replays to stay idempotent — the driver re-sends its
+ * full package snapshot with every execPickled message.
+ */
+const installedWheels = new Set<string>()
+
+async function ensureWheels(py: PyodideAPI, wheels: string[]): Promise<void> {
+  const missing = wheels.filter(
+    (target) => !installedWheels.has(target) && !(target in py.loadedPackages),
+  )
+  if (missing.length === 0) return
+  await py.loadPackage('micropip', { messageCallback: () => {} })
+  const micropip = py.pyimport('micropip') as {
+    install(requirements: unknown): Promise<void>
+    destroy(): void
+  }
+  const requirements = py.toPy(missing) as PyProxy
+  try {
+    await micropip.install(requirements)
+  } catch (err) {
+    throw new Error(
+      `Failed to install wheel target(s) [${missing.join(', ')}] via micropip: ${errorMessage(err)}`,
+    )
+  } finally {
+    requirements.destroy()
+    micropip.destroy()
+  }
+  for (const target of missing) installedWheels.add(target)
+}
+
+/**
+ * Fixed Python shim for execPickled: unpickle -> call -> repickle, defined
+ * once per interpreter so no per-task Python source is generated. Failures
+ * inside the call are caught in Python so the full traceback survives and
+ * the exception object itself can be cloudpickled for driver-side
+ * re-raising. Returns [ok, resultBytes, formattedTraceback, exceptionBytes];
+ * byte fields are JS Uint8Arrays built Python-side (JsBuffer.assign), so
+ * their buffers are plain ArrayBuffers that are safe to transfer.
+ */
+const RUN_PICKLED_SOURCE = `
+def _make_run_pickled():
+    import traceback
+
+    import cloudpickle
+    from js import Uint8Array
+
+    def _to_js_bytes(data):
+        buffer = Uint8Array.new(len(data))
+        buffer.assign(data)
+        return buffer
+
+    def _run_pickled(payload):
+        try:
+            func, args, kwargs = cloudpickle.loads(payload.to_bytes())
+            result = func(*args, **(kwargs or {}))
+            return [True, _to_js_bytes(cloudpickle.dumps(result)), None, None]
+        except BaseException as exc:
+            formatted = "".join(traceback.format_exception(exc))
+            pickled_exc = None
+            try:
+                pickled_exc = _to_js_bytes(cloudpickle.dumps(exc))
+            except BaseException:
+                pass
+            return [False, None, formatted, pickled_exc]
+
+    return _run_pickled
+
+
+_make_run_pickled()
+`
+
+type PyListProxy = PyProxy & { get(index: number): unknown }
+type RunPickledShim = (payload: Uint8Array) => PyListProxy
+
+let runPickledShim: RunPickledShim | null = null
+
+async function ensureRunPickledShim(py: PyodideAPI): Promise<RunPickledShim> {
+  if (runPickledShim !== null) return runPickledShim
+  await ensurePackages(py, ['cloudpickle'])
+  const namespace = (py.globals as PyDictProxy).get('dict')() as PyDictProxy
+  try {
+    // The shim keeps its own Python reference to the namespace; destroying
+    // the proxy only releases the JS handle.
+    runPickledShim = py.runPython(RUN_PICKLED_SOURCE, { globals: namespace }) as RunPickledShim
+  } finally {
+    namespace.destroy()
+  }
+  return runPickledShim
+}
+
+/**
  * Convert a runPythonAsync result to a structured-clone-safe value.
  * JS pass-through -> toJs (dicts become plain objects, no PyProxies) ->
  * JSON round-trip; a failure of all three propagates to dispatch(), which
@@ -200,6 +339,39 @@ async function handleExec(request: ExecRequest): Promise<WorkerResponse> {
     return { id: request.id, ok: true, result: toCloneSafe(py, raw), bootMs, execMs }
   } finally {
     namespace.destroy()
+  }
+}
+
+async function handleExecPickled(request: ExecPickledRequest): Promise<ExecPickledResponse> {
+  const { py, bootMs } = await ensurePyodide()
+  if (request.packages.length > 0) {
+    await ensurePackages(py, request.packages)
+  }
+  if (request.wheels.length > 0) {
+    await ensureWheels(py, request.wheels)
+  }
+  const shim = await ensureRunPickledShim(py)
+  const started = now()
+  const outcome = shim(new Uint8Array(request.payload))
+  const execMs = now() - started
+  try {
+    if (outcome.get(0) === true) {
+      const result = outcome.get(1) as Uint8Array
+      return { id: request.id, ok: true, payload: result.buffer as ArrayBuffer, bootMs, execMs }
+    }
+    const formatted = outcome.get(2) as string
+    const pickledExc = outcome.get(3) as Uint8Array | null | undefined
+    const lines = formatted.trimEnd().split('\n')
+    const error: WorkerErrorInfo = {
+      message: lines[lines.length - 1]?.trim() ?? 'execPickled task failed',
+      pythonTraceback: formatted,
+    }
+    if (pickledExc !== null && pickledExc !== undefined) {
+      error.exceptionPayload = pickledExc.buffer as ArrayBuffer
+    }
+    return { id: request.id, ok: false, error }
+  } finally {
+    outcome.destroy()
   }
 }
 
@@ -257,12 +429,25 @@ function isRequest(data: unknown): data is WorkerRequest {
   const record = data as Record<string, unknown>
   if (typeof record.id !== 'number') return false
   if (record.kind === 'exec') return typeof record.code === 'string'
+  if (record.kind === 'execPickled') {
+    return (
+      record.payload instanceof ArrayBuffer &&
+      Array.isArray(record.packages) &&
+      Array.isArray(record.wheels)
+    )
+  }
   return record.kind === 'ping'
 }
 
-function post(response: WorkerResponse): void {
+/** Buffers moved (not copied) with an execPickled response. */
+function execPickledTransfer(response: ExecPickledResponse): Transferable[] {
+  if (response.ok) return [response.payload]
+  return response.error.exceptionPayload === undefined ? [] : [response.error.exceptionPayload]
+}
+
+function post(response: WorkerResponse | ExecPickledResponse, transfer?: Transferable[]): void {
   try {
-    scope.postMessage(response)
+    scope.postMessage(response, transfer)
   } catch (err) {
     // The converted result still contained something structured clone
     // rejects; better an explicit error than a corrupted payload.
@@ -282,13 +467,20 @@ async function dispatch(data: unknown): Promise<void> {
       id: typeof id === 'number' ? id : -1,
       ok: false,
       error: {
-        message: `Malformed request (expected { id, kind: 'exec' | 'ping' }): ${describeValue(data)}`,
+        message: `Malformed request (expected { id, kind: 'exec' | 'execPickled' | 'ping' }): ${describeValue(data)}`,
       },
     })
     return
   }
   try {
-    post(data.kind === 'exec' ? await handleExec(data) : await handlePing(data))
+    if (data.kind === 'exec') {
+      post(await handleExec(data))
+    } else if (data.kind === 'execPickled') {
+      const response = await handleExecPickled(data)
+      post(response, execPickledTransfer(response))
+    } else {
+      post(await handlePing(data))
+    }
   } catch (err) {
     post({ id: data.id, ok: false, error: toErrorInfo(err) })
   }

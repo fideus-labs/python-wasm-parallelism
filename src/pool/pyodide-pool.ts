@@ -20,9 +20,12 @@
 import { WorkerPool } from '@fideus-labs/worker-pool'
 import type { WorkerPoolProgressCallback, WorkerPoolTask } from '@fideus-labs/worker-pool'
 import type {
+  ExecPickledRequest,
+  ExecPickledResponse,
   ExecRequest,
   PingStatus,
   WorkerErrorInfo,
+  WorkerFailure,
   WorkerRequest,
   WorkerResponse,
 } from '../worker/pyodide-worker.js'
@@ -62,6 +65,23 @@ export interface MapOptions {
   packages?: string[]
 }
 
+/** Options for {@link PyodidePool.runPickled}. */
+export interface RunPickledOptions {
+  /**
+   * Pyodide-distribution packages ensured loaded on the worker before the
+   * call executes, merged with the pool-level `packages`.
+   */
+  packages?: string[]
+  /** micropip targets (PyPI names or wheel URLs) ensured installed first. */
+  wheels?: string[]
+}
+
+/** Options for {@link PyodidePool.mapPickled}. */
+export interface MapPickledOptions extends RunPickledOptions {
+  /** Invoked after each payload completes with (completedTasks, totalTasks). */
+  onProgress?: WorkerPoolProgressCallback
+}
+
 /** Handle returned by {@link PyodidePool.map}. */
 export interface PyodideMapRun<T> {
   /** Resolves with per-item results in input order. */
@@ -89,12 +109,19 @@ export class PyodideTaskError extends Error {
   readonly pythonTraceback?: string
   /** JS stack from inside the worker, when available. */
   readonly workerStack?: string
+  /**
+   * `cloudpickle.dumps(exception)` from a failed `execPickled` task, when
+   * the exception object was picklable — lets a Python driver re-raise the
+   * original exception.
+   */
+  readonly exceptionPayload?: ArrayBuffer
 
   constructor(info: WorkerErrorInfo) {
     super(info.message)
     this.name = 'PyodideTaskError'
     this.pythonTraceback = info.pythonTraceback
     this.workerStack = info.stack
+    this.exceptionPayload = info.exceptionPayload
   }
 }
 
@@ -128,6 +155,11 @@ function resolveWorkerCtor(): Promise<WorkerCtor> {
 function unwrap<T>(response: WorkerResponse<T>): T {
   if (!response.ok) throw new PyodideTaskError(response.error)
   return response.result
+}
+
+function unwrapPickled(response: ExecPickledResponse): ArrayBuffer {
+  if (!response.ok) throw new PyodideTaskError(response.error)
+  return response.payload
 }
 
 function describeErrorEvent(event: ErrorEvent): string {
@@ -209,6 +241,49 @@ export class PyodidePool {
   }
 
   /**
+   * Run one cloudpickled call — `payload` is `cloudpickle.dumps((func,
+   * args, kwargs))` — and resolve with the cloudpickled result bytes.
+   * The payload buffer is posted as a transferable (zero-copy), so the
+   * caller's ArrayBuffer is detached after this call.
+   */
+  async runPickled(payload: ArrayBuffer, options: RunPickledOptions = {}): Promise<ArrayBuffer> {
+    const request = this.execPickledRequest(payload, options)
+    const { promise } = this.pool.runTasks([this.pickledTask(request)])
+    const [response] = await promise
+    if (response === undefined) {
+      throw new Error('worker-pool resolved without a response')
+    }
+    return unwrapPickled(response)
+  }
+
+  /**
+   * Run one cloudpickled call per payload with bounded parallelism. Same
+   * progress-reporting and `cancel(runId)` contract as {@link map}. Payload
+   * buffers are posted as transferables (zero-copy), so they are detached
+   * once dispatched — pass each buffer at most once.
+   */
+  mapPickled(
+    payloads: readonly ArrayBuffer[],
+    options: MapPickledOptions = {},
+  ): PyodideMapRun<ArrayBuffer> {
+    if (payloads.length === 0) {
+      // Same worker-pool runTasks([]) hang as map() — short-circuit.
+      return { promise: Promise.resolve([]), runId: -1, cancel: () => {} }
+    }
+    const tasks = payloads.map((payload) =>
+      this.pickledTask(this.execPickledRequest(payload, options)),
+    )
+    const { promise, runId } = this.pool.runTasks(tasks, options.onProgress ?? null)
+    return {
+      promise: promise.then((responses) => responses.map((response) => unwrapPickled(response))),
+      runId,
+      cancel: () => {
+        this.pool.cancel(runId)
+      },
+    }
+  }
+
+  /**
    * Boot `poolSize` interpreters in parallel (and preload the pool-level
    * `packages`) so later timing-sensitive work hits only warm workers.
    * The synchronous task fan-out in worker-pool guarantees each warmup task
@@ -221,7 +296,10 @@ export class PyodidePool {
         if (this.packages.length === 0) {
           const request: WorkerRequest = { id: this.nextMessageId++, kind: 'ping', boot: true }
           return async (worker) => {
-            const { worker: target, response } = await this.exchange<PingStatus>(worker, request)
+            const { worker: target, response } = await this.exchange<WorkerResponse<PingStatus>>(
+              worker,
+              request,
+            )
             return { worker: target, result: response }
           }
         }
@@ -230,11 +308,11 @@ export class PyodidePool {
         const execRequest = this.execRequest('None', undefined, undefined)
         const pingRequest: WorkerRequest = { id: this.nextMessageId++, kind: 'ping' }
         return async (worker) => {
-          const exec = await this.exchange<unknown>(worker, execRequest)
+          const exec = await this.exchange<WorkerResponse<unknown>>(worker, execRequest)
           if (!exec.response.ok) {
             return { worker: exec.worker, result: exec.response }
           }
-          const ping = await this.exchange<PingStatus>(exec.worker, pingRequest)
+          const ping = await this.exchange<WorkerResponse<PingStatus>>(exec.worker, pingRequest)
           const result = ping.response.ok
             ? { ...ping.response, bootMs: exec.response.bootMs }
             : ping.response
@@ -271,6 +349,16 @@ export class PyodidePool {
     return request
   }
 
+  private execPickledRequest(payload: ArrayBuffer, options: RunPickledOptions): ExecPickledRequest {
+    return {
+      id: this.nextMessageId++,
+      kind: 'execPickled',
+      payload,
+      packages: [...new Set([...this.packages, ...(options.packages ?? [])])],
+      wheels: [...new Set(options.wheels ?? [])],
+    }
+  }
+
   /**
    * Wrap one exchange as a worker-pool task that never rejects for
    * protocol-level failures: errors ride back inside the resolved
@@ -279,7 +367,19 @@ export class PyodidePool {
    */
   private protocolTask<T>(request: ExecRequest): WorkerPoolTask<WorkerResponse<T>> {
     return async (worker) => {
-      const { worker: target, response } = await this.exchange<T>(worker, request)
+      const { worker: target, response } = await this.exchange<WorkerResponse<T>>(worker, request)
+      return { worker: target, result: response }
+    }
+  }
+
+  /** {@link protocolTask}'s never-reject contract, for execPickled requests. */
+  private pickledTask(request: ExecPickledRequest): WorkerPoolTask<ExecPickledResponse> {
+    return async (worker) => {
+      const { worker: target, response } = await this.exchange<ExecPickledResponse>(
+        worker,
+        request,
+        [request.payload],
+      )
       return { worker: target, result: response }
     }
   }
@@ -291,28 +391,31 @@ export class PyodidePool {
 
   /**
    * One request/one response exchange, matched on the message `id` (the
-   * worker never posts unsolicited messages). Worker 'error' events (e.g. a
-   * bundle that fails to load) resolve as failure responses; the worker is
-   * remembered as dead and replaced on its next use instead of hanging.
+   * worker never posts unsolicited messages). `R` is the response union for
+   * the request kind; worker 'error' events (e.g. a bundle that fails to
+   * load) resolve as `WorkerFailure` responses regardless of kind, and the
+   * worker is remembered as dead and replaced on its next use instead of
+   * hanging. `transfer` buffers are moved (not cloned) with the request.
    */
-  private async exchange<T>(
+  private async exchange<R extends { id: number; ok: boolean }>(
     worker: Worker | null,
     request: WorkerRequest,
-  ): Promise<{ worker: Worker; response: WorkerResponse<T> }> {
+    transfer?: Transferable[],
+  ): Promise<{ worker: Worker; response: R | WorkerFailure }> {
     let usable = worker
     if (usable !== null && this.deadWorkers.has(usable)) {
       usable.terminate()
       usable = null
     }
     const target = usable ?? (await this.createWorker())
-    const response = await new Promise<WorkerResponse<T>>((resolve) => {
-      const settle = (value: WorkerResponse<T>): void => {
+    const response = await new Promise<R | WorkerFailure>((resolve) => {
+      const settle = (value: R | WorkerFailure): void => {
         target.removeEventListener('message', onMessage)
         target.removeEventListener('error', onError)
         resolve(value)
       }
       const onMessage = (event: MessageEvent): void => {
-        const data = event.data as WorkerResponse<T> | null
+        const data = event.data as R | null
         if (typeof data === 'object' && data !== null && data.id === request.id) {
           settle(data)
         }
@@ -327,7 +430,11 @@ export class PyodidePool {
       }
       target.addEventListener('message', onMessage)
       target.addEventListener('error', onError)
-      target.postMessage(request)
+      if (transfer === undefined) {
+        target.postMessage(request)
+      } else {
+        target.postMessage(request, transfer)
+      }
     })
     return { worker: target, response }
   }
