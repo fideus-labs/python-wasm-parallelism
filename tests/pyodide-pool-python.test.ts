@@ -8,6 +8,8 @@
  * docs/architecture/dask-scheduler-design.md. Tests share one driver and one
  * pool and run sequentially; each driver snippet ends in a json.dumps(...)
  * expression so assertions stay independent of PyProxy conversion rules.
+ * The package-mirroring test boots its own 1-worker pool (and loads numpy
+ * into the driver), so it must stay last in the file.
  */
 import { readFileSync, readdirSync } from 'node:fs'
 import path from 'node:path'
@@ -187,4 +189,89 @@ json.dumps({"packages": packages, "wheels": wheels})
   // the excluded names were filtered from both snapshot sources.
   expect(snapshot.packages).toEqual(['fake_dist_pkg'])
   expect(snapshot.wheels).toEqual(['https://example.com/fake_wheel_pkg-1.0-py3-none-any.whl'])
+})
+
+it('mirrors numpy to workers automatically; snapshot replay is idempotent', async () => {
+  // Dedicated 1-worker pool so both submits deterministically hit the SAME
+  // worker: the first submit must trigger the mirrored numpy install, the
+  // second must find the worker's installed-set already warm — replay being
+  // cheap and idempotent is the design's substitute for a driver/worker
+  // package-sync protocol. (The wheels/micropip mirror path gets the same
+  // treatment from the scheduler suite, which mirrors PyPI dask to workers.)
+  const numpyPool = new PyodidePool({ poolSize: 1, workerUrl: pathToFileURL(workerFile) })
+  try {
+    const [fresh] = await numpyPool.warmup()
+    expect(fresh.status.loadedPackages).not.toContain('numpy')
+
+    await driver.loadPackage('numpy', { messageCallback: () => {} })
+    driver.registerJsModule('js_numpy_pool', { pool: numpyPool })
+    const info = await run<{
+      snapshot_has_numpy: boolean
+      snapshot_calls: number
+      first: number[][]
+      second: number[][]
+      expected: number[][]
+      first_type: string
+      first_s: number
+      second_s: number
+    }>(`
+import json, time
+import numpy as np
+import js_numpy_pool
+import pyodide_pool
+import pyodide_pool._bridge as _bridge
+
+pool = pyodide_pool.WorkerPool(js_numpy_pool.pool)
+
+# Every submit must ride a FRESH snapshot on its execPickled message (no
+# separate sync machinery), so snapshot_packages is called once per submit.
+calls = {"n": 0}
+_orig_snapshot = _bridge.snapshot_packages
+def _counting_snapshot():
+    calls["n"] += 1
+    return _orig_snapshot()
+_bridge.snapshot_packages = _counting_snapshot
+
+# Lambda closes over the driver's numpy module; cloudpickle ships the module
+# by reference, so unpickling on the worker imports numpy there — which only
+# works because the mirrored snapshot installed it before unpickling.
+use_numpy = lambda: np.arange(6, dtype=np.int64).reshape(2, 3) * 2
+
+try:
+    t0 = time.perf_counter()
+    first = await pool.submit(use_numpy)
+    t1 = time.perf_counter()
+    second = await pool.submit(use_numpy)
+    t2 = time.perf_counter()
+finally:
+    _bridge.snapshot_packages = _orig_snapshot
+
+json.dumps({
+    "snapshot_has_numpy": "numpy" in pyodide_pool.snapshot_packages().packages,
+    "snapshot_calls": calls["n"],
+    "first": first.tolist(),
+    "second": second.tolist(),
+    "expected": use_numpy().tolist(),
+    "first_type": type(first).__name__,
+    "first_s": t1 - t0,
+    "second_s": t2 - t1,
+})
+`)
+    expect(info.snapshot_has_numpy).toBe(true)
+    expect(info.snapshot_calls).toBe(2)
+    expect(info.first_type).toBe('ndarray')
+    expect(info.first).toEqual(info.expected)
+    expect(info.second).toEqual(info.expected)
+    // Idempotent replay: the first submit paid for the worker's numpy
+    // download + install (seconds); the second found pyodide.loadedPackages
+    // warm and skipped straight to execution.
+    expect(info.second_s).toBeLessThan(info.first_s / 2)
+
+    // The ndarray round-trip proves numpy works on the worker; the worker's
+    // own interpreter status proves it was installed THERE, not just locally.
+    const [after] = await numpyPool.warmup()
+    expect(after.status.loadedPackages).toContain('numpy')
+  } finally {
+    numpyPool.terminate()
+  }
 })
