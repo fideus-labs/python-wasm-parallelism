@@ -10,6 +10,7 @@ related:
   - '[[dask-schedulers]]'
   - '[[worker-pool-api]]'
   - '[[phase-01-results]]'
+  - '[[phase-02-results]]'
   - '[[pyodide-parallelism]]'
 ---
 
@@ -73,7 +74,8 @@ payload: bytes = cloudpickle.dumps((func, args, kwargs))
 - **cloudpickle, not pickle** — it serializes functions *by value*, so
   lambdas, closures, and interactively defined functions (i.e. everything a
   dask graph contains) survive the trip. cloudpickle ships in the Pyodide
-  distribution (3.1.1 in Pyodide 0.28.x), so both sides always have it, and
+  distribution (3.1.2 in the Pyodide 314.x builds used here), so both sides
+  always have it, and
   since every worker runs the identical Pyodide build there is no
   cross-version pickle skew.
 - Driver side, the `bytes` convert to a JS buffer via `pyodide.ffi.to_js`
@@ -165,8 +167,10 @@ python/pyodide_pool/
 `scheduler.get(dsk, keys)` implements the classic Kahn-style executor over
 the raw graph dict, made async. Graph utilities come from dask
 (`dask.core.get_dependencies`, `dask.core.istask`, `dask.core.flatten`,
-`dask.core.toposort` for cycle detection/validation) rather than hand-rolled
-code.
+`dask.core.reverse_dict`, `dask.core.toposort` for cycle
+detection/validation) rather than hand-rolled code — except nested-key
+result assembly, a local `_nested_get` helper, because `dask.core.nested_get`
+no longer exists in dask ≥ 2025.
 
 ```python
 async def get(dsk, keys, **kwargs):
@@ -176,13 +180,19 @@ async def get(dsk, keys, **kwargs):
     indegree     = {k: len(v) for k, v in dependencies.items()}
     cache, pending = {}, {}          # key -> value; key -> asyncio future
 
-    def dispatch(key):               # literals resolve locally, tasks go remote
+    def dispatch(key):
         node = dsk[key]
-        if not istask(node):
-            cache[key] = resolve_literal(node, cache)   # incl. key aliases
-            return finish(key)                          # may ready dependents
-        func, args, kwargs_ = normalize(node, cache)    # substitute dep VALUES
-        pending[key] = asyncio.ensure_future(_bridge.submit(func, *args, **kwargs_))
+        values = {dep: cache[dep] for dep in dependencies[key]}  # dep VALUES
+        if isinstance(node, GraphNode):        # modern dask._task_spec dialect
+            if isinstance(node, (Alias, DataNode)):
+                cache[key] = node(values)                # local, no round-trip
+                return finish(key)                       # may ready dependents
+            pending[key] = ensure_future(submit(node, values))       # Task
+        elif istask(node):                     # legacy tuple dialect
+            pending[key] = ensure_future(submit(_evaluate_node, node, values))
+        else:                                  # literal / key alias / container
+            cache[key] = _evaluate_node(node, values)
+            finish(key)
 
     for key in (k for k, d in indegree.items() if d == 0):
         dispatch(key)                                   # all ready tasks at once
@@ -193,8 +203,15 @@ async def get(dsk, keys, **kwargs):
                 indegree[dep] -= 1
                 if indegree[dep] == 0:
                     dispatch(dep)                       # newly-ready fan-out
-    return nested_get(keys, cache)                      # handles nested key lists
+    return _nested_get(keys, cache)                     # handles nested key lists
 ```
+
+Dispatch classifies `GraphNode` **before** `istask` — in modern dask
+`istask(Alias)` is `True`, so the naive `istask`-only check from the first
+draft of this document would ship cheap aliases to workers. `Alias` and
+`DataNode` nodes resolve locally by calling the node with the dependency
+mapping; real `Task` nodes use the same callable-with-mapping convention and
+go remote as `submit(node, values)`.
 
 Key decisions:
 
@@ -216,12 +233,17 @@ Key decisions:
   asyncio futures, and the original Python exception re-raises on the driver
   with its remote traceback attached (below). Later phases can add
   partial-failure modes if needed.
-- `compute(*collections)` is the user-facing wrapper:
-  `dask.base.collections_to_dsk(collections)` (equivalently
-  `__dask_graph__()`) materializes the graph, `__dask_keys__()` names the
-  outputs, `get(...)` executes, and `__dask_postcompute__()`'s finalize
-  functions assemble the results — so `dask.delayed`, `dask.bag`, and dask
-  arrays all work through the one entry point.
+- `compute(*collections)` is the user-facing wrapper. On expression-based
+  dask (2025+, where `dask.base.collections_to_dsk` no longer exists) it
+  follows modern `dask.base.compute`: `unpack_collections` +
+  `collections_to_expr` wrapped in `FinalizeCompute`, then `expr.optimize()`
+  — each collection's finalize step is compiled into the graph itself, so
+  `get(...)` runs flat keys and `repack(results)` reassembles the output
+  structure. The classic `collections_to_dsk` + `__dask_keys__()` +
+  `__dask_postcompute__()` protocol is kept as an `ImportError` fallback for
+  older dask. Either way `dask.delayed`, `dask.bag`, and dask arrays all work
+  through the one entry point; a single argument returns its bare result
+  (matching `obj.compute()`), several return a tuple.
 - Memory: Phase 02 keeps every computed value in `cache` until `get`
   returns. dask.local's eager release via `waiting_data` refcounts is a
   known follow-up (worth it for large array graphs), noted here so the
@@ -275,7 +297,8 @@ Workers must be able to satisfy those imports without user intervention.
 - **Acceptance check**: driver loads numpy, submits a lambda that uses numpy;
   the worker auto-installs numpy from the snapshot and returns the correct
   array result. First task on each worker pays the install once; subsequent
-  tasks skip it (measured in [[phase-02-results]] when it exists).
+  tasks skip it (measured in [[phase-02-results]]: ~0.4 s for a first batch
+  of 4 numpy tasks across 4 workers, ~40 ms for the identical second batch).
 
 ## Error propagation: original tracebacks, both layers
 
