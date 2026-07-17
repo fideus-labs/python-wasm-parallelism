@@ -147,7 +147,15 @@ async function ensurePyodide(): Promise<{ py: PyodideAPI; bootMs: number }> {
     return { py: await pyodidePromise, bootMs: 0 }
   }
   const started = now()
-  pyodidePromise = loadPyodide()
+  // Node worker_threads have no process.stdout.fd, so Pyodide's default
+  // Node stdout/stderr device throws on every Python-level write (e.g.
+  // micropip's internal "Loading ..." messages while mirroring packages).
+  // console.log/error are wired up correctly in worker_threads and browser
+  // workers alike.
+  pyodidePromise = loadPyodide({
+    stdout: (line) => console.log(line),
+    stderr: (line) => console.error(line),
+  })
   try {
     const py = await pyodidePromise
     return { py, bootMs: now() - started }

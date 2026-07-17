@@ -9,6 +9,7 @@
     "build": "node scripts/build.mjs",
     "typecheck": "tsc --noEmit",
     "demo:node": "npm run build && tsx examples/node-demo.ts",
+    "demo:dask": "npm run build && tsx examples/node-dask-demo.ts",
     "test": "vitest run"
   },
   "dependencies": {
