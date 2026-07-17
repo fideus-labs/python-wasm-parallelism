@@ -1,5 +1,7 @@
 # Pyodide Worker-Pool Parallelism
 
+![Live Demo](https://fideus-labs.github.io/python-wasm-parallelism/)
+
 Parallel CPU-bound Python in WebAssembly: a pool of Web Workers (browser)
 or `worker_threads` (Node), each hosting its own [Pyodide](https://pyodide.org)
 interpreter, coordinated over message passing — with two familiar Python
