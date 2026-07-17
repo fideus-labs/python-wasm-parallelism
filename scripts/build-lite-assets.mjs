@@ -4,9 +4,11 @@
 //   1. the self-contained browser bundle -> demos/jupyterlite/files/assets/
 //      (import()ed from inside the Pyodide kernel worker by
 //      python/pyodide_pool/loader.py)
-//   2. the pyodide_pool wheel (python/pyproject.toml, built with uv)
+//   2. the pyodide_pool and wasm_multiprocessing wheels (python/pyproject.toml
+//      and python/wasm_multiprocessing/pyproject.toml, built with uv)
 //      -> demos/jupyterlite/files/wheels/ (installed by the notebooks'
-//      first piplite cell)
+//      first piplite cell; wasm_multiprocessing depends on pyodide_pool,
+//      which is not on PyPI, so the notebooks install the pool wheel first)
 //
 // Both output directories are generated (gitignored); this script is the
 // only writer.
@@ -25,15 +27,19 @@ console.log(`copied ${path.basename(outfile)} -> demos/jupyterlite/files/assets/
 
 const wheelsDir = path.join(liteFiles, 'wheels')
 mkdirSync(wheelsDir, { recursive: true })
+const wheelProjects = [path.join(rootDir, 'python'), path.join(rootDir, 'python', 'wasm_multiprocessing')]
 try {
-  execFileSync('uv', ['build', '--wheel', '--out-dir', wheelsDir, path.join(rootDir, 'python')], {
-    stdio: 'inherit',
-  })
+  for (const project of wheelProjects) {
+    execFileSync('uv', ['build', '--wheel', '--out-dir', wheelsDir, project], {
+      stdio: 'inherit',
+    })
+  }
 } catch (err) {
   if (err.code === 'ENOENT') {
     console.error(
-      'uv not found on PATH — install uv (https://docs.astral.sh/uv/) or build the wheel ' +
-        'manually: python -m build --wheel --outdir demos/jupyterlite/files/wheels python',
+      'uv not found on PATH — install uv (https://docs.astral.sh/uv/) or build the wheels ' +
+        'manually: python -m build --wheel --outdir demos/jupyterlite/files/wheels ' +
+        wheelProjects.join(' '),
     )
     process.exit(1)
   }
