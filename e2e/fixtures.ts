@@ -22,32 +22,42 @@ export type { DemoApi }
  * candidates); they usually arrive as console.log but are allowed at any
  * severity so a Pyodide bump can't flake the suite.
  */
-const ALLOWED_CONSOLE_ERRORS: RegExp[] = [/^Loading [\w, .-]+$/, /^Loaded [\w, .-]+$/]
+export const ALLOWED_CONSOLE_ERRORS: RegExp[] = [/^Loading [\w, .-]+$/, /^Loaded [\w, .-]+$/]
 
 interface DemoFixtures {
   /** Unexpected console.error / pageerror lines collected so far. */
   consoleErrors: string[]
 }
 
-export const test = base.extend<DemoFixtures>({
-  consoleErrors: [
-    async ({ page }, use) => {
-      const unexpected: string[] = []
-      page.on('console', (message) => {
-        if (message.type() !== 'error') return
-        const text = message.text()
-        if (ALLOWED_CONSOLE_ERRORS.some((pattern) => pattern.test(text))) return
-        unexpected.push(`console.error: ${text}`)
-      })
-      page.on('pageerror', (error) => {
-        unexpected.push(`pageerror: ${error.message}`)
-      })
-      await use(unexpected)
-      expect(unexpected, 'unexpected console errors / uncaught page errors').toEqual([])
-    },
-    { auto: true },
-  ],
-})
+/**
+ * Build a test base whose console watchdog allows the given patterns (in
+ * addition to nothing else). The JupyterLite spec extends the shared
+ * allow-list with JupyterLab-specific noise without loosening this suite.
+ */
+export function makeConsoleWatchdogTest(allowedPatterns: RegExp[]) {
+  return base.extend<DemoFixtures>({
+    consoleErrors: [
+      async ({ page }, use) => {
+        const unexpected: string[] = []
+        page.on('console', (message) => {
+          if (message.type() !== 'error') return
+          const text = message.text()
+          if (allowedPatterns.some((pattern) => pattern.test(text))) return
+          unexpected.push(`console.error: ${text}`)
+        })
+        page.on('pageerror', (error) => {
+          if (allowedPatterns.some((pattern) => pattern.test(error.message))) return
+          unexpected.push(`pageerror: ${error.message}`)
+        })
+        await use(unexpected)
+        expect(unexpected, 'unexpected console errors / uncaught page errors').toEqual([])
+      },
+      { auto: true },
+    ],
+  })
+}
+
+export const test = makeConsoleWatchdogTest(ALLOWED_CONSOLE_ERRORS)
 
 export { expect } from '@playwright/test'
 
