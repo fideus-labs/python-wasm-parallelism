@@ -17,6 +17,7 @@ import type { PyodideAPI } from 'pyodide'
 import { fmtMs } from '../bench/schema'
 import { PyodidePool, PyodideTaskError } from '../src/index'
 import type { PyodideSource } from '../src/index'
+import type { DaskRecord, DemoRecord, PoolSetupStat, RunRecord } from './demo-api'
 import initPy from '../python/pyodide_pool/__init__.py?raw'
 import bridgePy from '../python/pyodide_pool/_bridge.py?raw'
 import packagesPy from '../python/pyodide_pool/_packages.py?raw'
@@ -32,6 +33,8 @@ const RANGE_START = 2
 const RANGE_END = 2_000_000
 const CHUNK_COUNT = 8
 const EXPECTED_TOTAL = 148_933
+/** sum(range(RANGE_START, RANGE_END)) — the numpy mirroring workload. */
+const NUMPY_EXPECTED_TOTAL = ((RANGE_END - 1) * RANGE_END - (RANGE_START - 1) * RANGE_START) / 2
 
 /** Keep in sync with the `pyodide` version in package.json. */
 const PYODIDE_VERSION = '314.0.2'
@@ -91,42 +94,10 @@ function makeChunks(start: number, end: number, count: number): Chunk[] {
 
 // ---------------------------------------------------------------------------
 // Result records — plain JSON-safe objects so page.evaluate can return them.
+// Shapes live in demo-api.ts, shared with the Playwright suite (e2e/).
 // ---------------------------------------------------------------------------
 
-export interface RunRecord {
-  kind: 'serial' | 'parallel'
-  label: string
-  workers: number
-  /** Wall-clock of the workload run (pool boots excluded). */
-  ms: number
-  /** Per-chunk prime counts, in chunk order. */
-  counts: number[]
-  total: number
-  expectedTotal: number
-  matchesExpected: boolean
-  /** Counts identical to the latest serial baseline; null without one. */
-  matchesSerial: boolean | null
-  /** vs the latest serial baseline; null without one (or for the baseline). */
-  speedup: number | null
-}
-
-export interface DaskRecord {
-  kind: 'dask'
-  label: string
-  workers: number
-  /** Wall-clock of pyodide_pool.compute (the pool scheduler). */
-  ms: number
-  /** Wall-clock of dask's synchronous scheduler on the same graph. */
-  syncMs: number
-  poolTotal: number
-  syncTotal: number
-  matchesExpected: boolean
-  /** Pool-scheduler result equals the synchronous-scheduler result. */
-  equal: boolean
-  speedup: number
-}
-
-export type DemoRecord = RunRecord | DaskRecord
+export type { DaskRecord, DemoApi, DemoRecord, PoolSetupStat, RunRecord } from './demo-api'
 
 // ---------------------------------------------------------------------------
 // DOM wiring
@@ -212,6 +183,9 @@ function addRow(record: DemoRecord): void {
 
 const pools = new Map<number, Promise<PyodidePool>>()
 
+/** Warmup costs per pool size, in boot order — exposed via __demo.setup(). */
+const setupStats: PoolSetupStat[] = []
+
 /** Create-and-warm a pool per size, once — later calls reuse warm workers. */
 function poolOfSize(size: number): Promise<PyodidePool> {
   let entry = pools.get(size)
@@ -222,7 +196,14 @@ function poolOfSize(size: number): Promise<PyodidePool> {
         workerUrl,
         pyodideSource: PYODIDE_SOURCE,
       })
-      await pool.warmup()
+      const started = performance.now()
+      const warm = await pool.warmup()
+      setupStats.push({
+        poolSize: size,
+        warmupWallMs: performance.now() - started,
+        workerBootMs: warm.map((worker) => worker.bootMs),
+        pyodideVersion: warm[0]?.status.pyodideVersion ?? null,
+      })
       return pool
     })()
     pools.set(size, entry)
@@ -429,6 +410,71 @@ json.dumps({
 }
 
 /**
+ * Dask graph whose leaves need numpy on the workers: the driver loads numpy
+ * from the CDN, and the first pickled task that uses it triggers
+ * pyodide_pool's package mirroring (each worker replays the driver's
+ * package snapshot from the same CDN — the tests/dask-scheduler.test.ts
+ * numpy topology). Integer sums keep result equality exact.
+ */
+async function runNumpy(): Promise<DaskRecord> {
+  const driver = await ensureDaskDriver()
+  setStatus('loading numpy into the driver from the CDN…')
+  await driver.loadPackage('numpy', { messageCallback: () => {} })
+  const chunks = makeChunks(RANGE_START, RANGE_END, CHUNK_COUNT)
+  setStatus('computing the numpy graph (synchronous, then on the pool)…')
+  setProgress(0, 1)
+  const outcome = await runDriverJson<{
+    sync_total: number
+    pool_total: number
+    sync_s: number
+    pool_s: number
+  }>(
+    driver,
+    `
+import json, time, dask, pyodide_pool
+
+def chunk_sum(lo, hi):
+    import numpy as np
+    return int(np.arange(lo, hi, dtype=np.int64).sum())
+
+chunks = ${JSON.stringify(chunks.map((chunk) => [chunk.lo, chunk.hi]))}
+leaves = [dask.delayed(chunk_sum)(lo, hi) for lo, hi in chunks]
+total = dask.delayed(sum)(leaves)
+
+t0 = time.perf_counter()
+sync_total = total.compute(scheduler="synchronous")
+sync_s = time.perf_counter() - t0
+
+t0 = time.perf_counter()
+pool_total = await pyodide_pool.compute(total)
+pool_s = time.perf_counter() - t0
+
+json.dumps({
+    "sync_total": sync_total,
+    "pool_total": pool_total,
+    "sync_s": sync_s,
+    "pool_s": pool_s,
+})
+`,
+  )
+  setProgress(1, 1)
+  const record: DaskRecord = {
+    kind: 'dask',
+    label: 'dask numpy (pool scheduler)',
+    workers: POOL_SIZE,
+    ms: outcome.pool_s * 1000,
+    syncMs: outcome.sync_s * 1000,
+    poolTotal: outcome.pool_total,
+    syncTotal: outcome.sync_total,
+    matchesExpected: outcome.pool_total === NUMPY_EXPECTED_TOTAL,
+    equal: outcome.pool_total === outcome.sync_total,
+    speedup: outcome.sync_s / outcome.pool_s,
+  }
+  finishRun(record)
+  return record
+}
+
+/**
  * Deliberately raise a Python exception on a worker and surface it through
  * the UI error area — never as an unhandled rejection. Resolves with the
  * message shown, so Playwright can assert on both the return value and the
@@ -520,33 +566,6 @@ ready.catch((err: unknown) => {
 // window.__demo — the deterministic hook Playwright drives
 // ---------------------------------------------------------------------------
 
-export interface DemoApi {
-  /** Resolves with 'ready' once the driver has booted and the pool is warm. */
-  ready: Promise<string>
-  isolated: boolean
-  config: {
-    poolSize: number
-    rangeStart: number
-    rangeEnd: number
-    chunkCount: number
-    expectedTotal: number
-    pyodideVersion: string
-  }
-  /** All finished runs, oldest first. */
-  results(): DemoRecord[]
-  runSerial(): Promise<RunRecord>
-  runParallel(workers?: number): Promise<RunRecord>
-  runDask(): Promise<DaskRecord>
-  /** Trigger a Python failure; resolves with the UI-surfaced message. */
-  runFailing(): Promise<string>
-}
-
-declare global {
-  interface Window {
-    __demo: DemoApi
-  }
-}
-
 window.__demo = {
   ready,
   isolated: globalThis.crossOriginIsolated === true,
@@ -559,9 +578,11 @@ window.__demo = {
     pyodideVersion: PYODIDE_VERSION,
   },
   results: () => [...history],
+  setup: () => [...setupStats],
   runSerial: () => guarded('serial', runSerial),
   runParallel: (workers?: number) =>
     guarded(`parallel (${workers ?? POOL_SIZE} workers)`, () => runParallel(workers)),
   runDask: () => guarded('dask graph', runDask),
+  runNumpy: () => guarded('dask numpy graph', runNumpy),
   runFailing: () => guarded('failing task', runFailing),
 }

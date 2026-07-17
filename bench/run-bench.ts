@@ -33,7 +33,7 @@ import type { PyodideDriver } from '../tests/helpers.js'
 import { generateReport } from './report.js'
 import type {
   BenchCell,
-  BenchConfig,
+  NodeBenchConfig,
   BenchResults,
   OverheadStat,
   PoolSetup,
@@ -49,7 +49,7 @@ const resultsDir = path.join(rootDir, 'bench', 'results')
 // Configuration
 // ---------------------------------------------------------------------------
 
-function fullConfig(): BenchConfig {
+function fullConfig(): NodeBenchConfig {
   const cap = os.availableParallelism()
   return {
     poolSizes: [1, 2, 4, 8].filter((size) => size <= cap),
@@ -67,7 +67,7 @@ function fullConfig(): BenchConfig {
 }
 
 /** Tiny matrix that exercises every code path in under ~2 minutes. */
-function smokeConfig(): BenchConfig {
+function smokeConfig(): NodeBenchConfig {
   const cap = os.availableParallelism()
   return {
     poolSizes: [1, 2].filter((size) => size <= cap),
@@ -272,7 +272,7 @@ async function measureNoop(pool: PyodidePool, reps: number): Promise<OverheadSta
 /** Echo a 1 MiB float64 array through pyodide_pool.submit (cloudpickle both ways). */
 async function measurePayload(
   driver: PyodideDriver,
-  config: BenchConfig,
+  config: NodeBenchConfig,
   failures: string[],
 ): Promise<OverheadStat & { payloadBytes: number }> {
   await driver.api.runPythonAsync(

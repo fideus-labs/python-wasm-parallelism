@@ -1,14 +1,16 @@
 /**
- * Machine-readable result schema shared by the benchmark harness
- * (bench/run-bench.ts, producer) and the report generator (bench/report.ts,
- * consumer). docs/benchmarks/node-benchmarks.md is always REGENERATED from a
+ * Machine-readable result schema shared by the benchmark producers
+ * (bench/run-bench.ts for Node, e2e/bench.spec.ts for the browser) and the
+ * report generator (bench/report.ts, consumer).
+ * docs/benchmarks/node-benchmarks.md is always REGENERATED from a
  * bench/results/node-<date>.json conforming to these types — never edited by
  * hand — so schema changes must update the generator in the same commit.
  */
 
 export interface BenchContext {
+  /** Node version — for browser runs, the Playwright runner's Node. */
   node: string
-  /** Version of the pyodide npm package (node_modules/pyodide). */
+  /** Version of the pyodide npm package (node_modules/pyodide or CDN pin). */
   pyodideNpm: string | null
   /** Pyodide runtime version reported by a worker ping after boot. */
   pyodideRuntime: string | null
@@ -18,6 +20,10 @@ export interface BenchContext {
   cpuModel: string
   cores: number
   availableParallelism: number
+  /** Browser name + version — present only for browser (@bench spec) runs. */
+  browser?: string
+  /** navigator.userAgent — present only for browser runs. */
+  userAgent?: string
 }
 
 /** Prime-counting range config (shared by the raw-pool and dask workloads). */
@@ -48,14 +54,21 @@ export interface BenchConfig {
   /** Timed repetitions per (workload, poolSize) cell; median is reported. */
   repetitions: number
   primes: PrimesConfig
-  pi: PiConfig
-  matmul: MatmulConfig
-  dask: PrimesConfig
-  noopReps: number
-  payloadReps: number
+  /**
+   * Workload/overhead configs below are absent when a harness doesn't run
+   * them — the browser @bench spec (e2e/bench.spec.ts) records only primes.
+   */
+  pi?: PiConfig
+  matmul?: MatmulConfig
+  dask?: PrimesConfig
+  noopReps?: number
+  payloadReps?: number
   /** float64 element count of the echo payload (bytes = 8 × this). */
-  payloadFloats: number
+  payloadFloats?: number
 }
+
+/** The Node harness (bench/run-bench.ts) runs every workload and overhead. */
+export type NodeBenchConfig = Required<BenchConfig>
 
 export interface BenchCell {
   poolSize: number

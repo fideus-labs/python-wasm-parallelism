@@ -1,0 +1,120 @@
+{
+  "schema": 1,
+  "createdAt": "2026-07-17T07:52:09.497Z",
+  "mode": "full",
+  "context": {
+    "node": "v24.18.0",
+    "pyodideNpm": "314.0.2",
+    "pyodideRuntime": "314.0.2",
+    "platform": "linux",
+    "release": "6.6.114.1-microsoft-standard-WSL2",
+    "arch": "arm64",
+    "cpuModel": "unknown",
+    "cores": 16,
+    "availableParallelism": 16,
+    "browser": "chromium 149.0.7827.0",
+    "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.7827.55 Safari/537.36"
+  },
+  "config": {
+    "poolSizes": [
+      1,
+      2,
+      4
+    ],
+    "repetitions": 3,
+    "primes": {
+      "rangeStart": 2,
+      "rangeEnd": 2000000,
+      "chunkCount": 8,
+      "expectedTotal": 148933
+    }
+  },
+  "setup": [
+    {
+      "poolSize": 4,
+      "warmupWallMs": 1502.5049999952316,
+      "workerBootMs": [
+        1464.2849999964237,
+        1460.3399999961257,
+        1466.4250000044703,
+        1455.2000000029802
+      ],
+      "mirrorWarmMs": 0
+    },
+    {
+      "poolSize": 2,
+      "warmupWallMs": 1101.7299999967217,
+      "workerBootMs": [
+        1093.719999998808,
+        1077.640000000596
+      ],
+      "mirrorWarmMs": 0
+    }
+  ],
+  "workloads": [
+    {
+      "id": "primes",
+      "title": "Prime counting (pure Python, CPU-bound)",
+      "description": "Trial-division prime counting from the browser demo, driven through `window.__demo` in headless Chromium (serial = every chunk sequentially in one task on a warm worker; parallel = `pool.map()` across the chunks).",
+      "totalWork": "primes in [2, 2000000) across 8 chunks",
+      "cells": [
+        {
+          "poolSize": 1,
+          "warmupMs": 5897.105000004172,
+          "runsMs": [
+            5817.7750000059605,
+            5872.939999997616,
+            5785.875
+          ],
+          "medianMs": 5817.7750000059605,
+          "value": 148933
+        },
+        {
+          "poolSize": 2,
+          "warmupMs": 3362.990000002086,
+          "runsMs": [
+            3309.115000002086,
+            3298.179999999702,
+            3280.164999999106
+          ],
+          "medianMs": 3298.179999999702,
+          "value": 148933
+        },
+        {
+          "poolSize": 4,
+          "warmupMs": 1827.1600000038743,
+          "runsMs": [
+            1824.5600000023842,
+            1854.1049999967217,
+            1859.414999999106
+          ],
+          "medianMs": 1854.1049999967217,
+          "value": 148933
+        }
+      ]
+    }
+  ],
+  "overheads": {
+    "workerBoot": {
+      "samples": [
+        1464.2849999964237,
+        1460.3399999961257,
+        1466.4250000044703,
+        1455.2000000029802,
+        1093.719999998808,
+        1077.640000000596
+      ],
+      "medianMs": 1457.769999999553
+    },
+    "noopRoundTrip": {
+      "samples": [],
+      "medianMs": null
+    },
+    "payloadRoundTrip": {
+      "samples": [],
+      "medianMs": null,
+      "payloadBytes": 0
+    }
+  },
+  "failures": []
+}
