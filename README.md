@@ -1,6 +1,6 @@
-# Pyodide Worker-Pool Parallelism
+# 🐍⚡ Pyodide Worker-Pool Parallelism
 
-[Live Demo](https://fideus-labs.github.io/python-wasm-parallelism/)
+🔗 [Live Demo](https://fideus-labs.github.io/python-wasm-parallelism/)
 
 Parallel CPU-bound Python in WebAssembly: a pool of Web Workers (browser)
 or `worker_threads` (Node), each hosting its own [Pyodide](https://pyodide.org)
@@ -11,14 +11,14 @@ A single Pyodide interpreter is strictly single-threaded (no `-pthread`, no
 `fork`), so parallelism means *many interpreters*. This project builds that
 substrate once and exposes it three ways:
 
-- **JS API** — `PyodidePool`: run Python snippets or cloudpickled calls
+- **🟨 JS API** — `PyodidePool`: run Python snippets or cloudpickled calls
   across the pool (`runPython`, `map`, `runPickled`, `mapPickled`), with
   parallel warm boot, LIFO worker recycling, progress, and cancellation.
-- **dask backend** — `await pyodide_pool.compute(...)`: an async scheduler
+- **🔀 dask backend** — `await pyodide_pool.compute(...)`: an async scheduler
   running in a "driver" Pyodide instance executes `dask.delayed` /
   `dask.bag` / dask-array graphs in parallel on the pool, with automatic
   package mirroring (driver has numpy ⇒ workers install it on first task).
-- **`multiprocessing` shim** — `from wasm_multiprocessing import Pool`:
+- **🧩 `multiprocessing` shim** — `from wasm_multiprocessing import Pool`:
   stdlib-shaped `Pool`/`AsyncResult` so existing `multiprocessing` code
   runs after changing one import line — async-native (`amap`, `aapply`, …)
   everywhere, genuinely blocking `map`/`get` where JSPI allows it.
@@ -27,7 +27,7 @@ Everything runs in Node, in a browser page (Vite demo), and inside
 JupyterLite — where the Pyodide kernel is itself a Web Worker and the pool
 spawns *nested* workers.
 
-## Architecture
+## 🏗️ Architecture
 
 ```mermaid
 flowchart LR
@@ -63,7 +63,7 @@ within 4% of each other; per-task floor ~0.7 ms + ~10 ms/MiB of payload;
 ~1.1–1.4 s one-time boot per worker. Details in the
 [benchmark reports](docs/benchmarks/).
 
-## Layout
+## 📁 Layout
 
 | Path | What it is |
 | --- | --- |
@@ -78,7 +78,7 @@ within 4% of each other; per-task floor ~0.7 ms + ~10 ms/MiB of payload;
 | `bench/` | Node benchmark harness + report generators (writes `docs/benchmarks/`) |
 | `docs/` | The knowledge base — [map below](#documentation-map) |
 
-## Quick start
+## 🚀 Quick start
 
 Prerequisites:
 
@@ -139,9 +139,9 @@ postMessage-based, so it needs no COOP/COEP headers there. Once Pages is
 enabled, the talk URL is
 `https://<owner>.github.io/<repo>/lab/index.html?path=00-scipy-lightning.ipynb`.
 
-## Documentation map
+## 📚 Documentation map
 
-**Research** (Phase 01 groundwork — [index](docs/research/index.md)):
+**🔬 Research** (Phase 01 groundwork — [index](docs/research/index.md)):
 
 - [pyodide-parallelism](docs/research/pyodide-parallelism.md) — platform
   ground truth: workers, Node, SharedArrayBuffer/COOP-COEP, the
@@ -154,7 +154,7 @@ enabled, the talk URL is
   why stdlib `multiprocessing` fails under Emscripten and what can be
   honestly emulated
 
-**Architecture** (the designs, written before the code):
+**📐 Architecture** (the designs, written before the code):
 
 - [dask-scheduler-design](docs/architecture/dask-scheduler-design.md) —
   driver/worker topology, cloudpickle wire format, the async graph
@@ -168,13 +168,13 @@ enabled, the talk URL is
 - [spikes/](docs/architecture/spikes/) — the re-runnable Node/browser
   blocking-behavior spikes the strategy is grounded in
 
-**Benchmarks** (regenerated from recorded JSON by `bench:report*`):
+**📊 Benchmarks** (regenerated from recorded JSON by `bench:report*`):
 
 - [node-benchmarks](docs/benchmarks/node-benchmarks.md) — pool sizes 1–8 ×
   four workloads, boot/dispatch/serialization floors
 - [browser-benchmarks](docs/benchmarks/browser-benchmarks.md) — headless
   Chromium via the `@bench` Playwright spec, plus the Node-vs-browser delta
 
-## License
+## 📄 License
 
 [MIT](LICENSE.txt)
