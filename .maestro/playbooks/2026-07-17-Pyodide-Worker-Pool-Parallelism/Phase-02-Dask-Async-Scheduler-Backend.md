@@ -1,0 +1,43 @@
+# Phase 02: Dask Async Scheduler Backend with Package Mirroring
+
+This phase builds the headline feature: a dask scheduler that runs inside a "main" Pyodide instance and executes dask task graphs in parallel by dispatching work to the Pyodide worker pool from Phase 01. Callables and arguments travel to workers as cloudpickle payloads, and workers automatically mirror the packages installed in the main instance so user code (numpy, etc.) just works. The result is `await pyodide_pool.compute(delayed_obj)` producing the same answers as dask's synchronous scheduler, faster.
+
+## Tasks
+
+- [x] Review existing code and research docs, then write the design document before implementing. Read `src/pool/pyodide-pool.ts`, `src/worker/pyodide-worker.ts`, `docs/research/dask-schedulers.md`, and `docs/notes/phase-01-results.md`. Create `docs/architecture/dask-scheduler-design.md` with front matter (`type: analysis`, tags `[dask, architecture, scheduler]`) and wiki-links to `[[dask-schedulers]]` and `[[worker-pool-api]]`, covering:
+  - The main-instance topology: a "driver" Pyodide runs user code + the scheduler; the JS `PyodidePool` is exposed to driver Python via `pyodide.registerJsModule('js_pyodide_pool', ...)`
+  - Task wire format: `cloudpickle.dumps((func, args, kwargs))` → bytes → transferred to worker → unpickled, executed, result cloudpickled back (cloudpickle ships in the Pyodide distribution)
+  - Scheduler algorithm: async graph executor — compute in-degrees over the dask graph (`dsk` dict), dispatch all ready tasks concurrently, on each completion decrement dependents and dispatch newly-ready tasks, until requested keys resolve; failures propagate the original Python traceback
+  - Why the scheduler must be async (no blocking on the browser main thread) and how JS promises bridge to asyncio futures on Pyodide's event loop
+
+  > **Done 2026-07-17.** `docs/architecture/dask-scheduler-design.md` created after reading all four sources. Covers the four required areas plus: the `execPickled` message shape and idempotent installed-set, `runPickled`/`mapPickled` signatures, the `python/pyodide_pool/` package layout (no top-level dask import, for Phase 06 reuse), package-mirroring snapshot/filter rules (`register_pickle_by_value(pyodide_pool)`), concurrent.futures-style remote-traceback re-raising, and a risks section (per-task ms overhead, no locality, no eager cache release, modern task-spec graphs needing dask on workers). Notable design decisions recorded: scheduler dispatches all ready tasks and lets the JS pool bound concurrency; workers never need dask for legacy-tuple graphs because scheduler helpers travel by value; protocol tasks still always resolve (worker-pool 1.0.0 rejection semantics from Phase 01).
+
+- [ ] Extend the worker protocol in `src/worker/pyodide-worker.ts` and rebuild:
+  - New message `kind: 'execPickled'` carrying `{ id, payload: ArrayBuffer, packages: string[], wheels: string[] }` — ensure listed packages are loaded (`pyodide.loadPackage` for distribution packages, `micropip.install` for wheel URLs/PyPI names; keep a module-scope set of already-installed names so replays are idempotent), then unpickle with cloudpickle, call `func(*args, **kwargs)`, cloudpickle the result, and post back `{ id, ok: true, payload: ArrayBuffer }` using transferables
+  - Preserve full Python tracebacks in the error path (send the formatted traceback string; also cloudpickle the exception object when possible so the driver can re-raise it)
+  - Add matching methods on `PyodidePool` in `src/pool/pyodide-pool.ts`: `runPickled(payload, { packages, wheels })` and `mapPickled(payloads, opts)` built on `pool.runTasks` so progress reporting and `cancel(runId)` keep working. Run `npm run build && npm run typecheck`
+
+- [ ] Create the driver-side Python package under `python/pyodide_pool/` (this code runs in the MAIN Pyodide instance, not in workers):
+  - `__init__.py` exporting the public API: `WorkerPool` (Python wrapper), `compute`, `get`
+  - `_bridge.py` — wraps the JS pool object from `js_pyodide_pool`: `async def submit(func, /, *args, **kwargs)` that cloudpickles the call, converts to a JS-transferable buffer via `pyodide.ffi`, awaits the JS promise (JS promises are directly awaitable in Pyodide), and unpickles the returned buffer; raise the remote exception with its original traceback attached
+  - `_packages.py` — package-mirroring helpers (see next task)
+  - Keep the package pure-Python with no hard dask import at module top level so it can also serve the Phase 06 multiprocessing shim
+
+- [ ] Implement the async dask scheduler in `python/pyodide_pool/scheduler.py`:
+  - `async def get(dsk, keys, **kwargs)` implementing the design-doc algorithm on the raw graph (use `dask.core.get_dependencies` / `dask.core.toposort` helpers rather than hand-rolling graph utilities; handle nested key lists like dask's own `get`). Literal (non-task) graph values resolve locally without a worker round-trip
+  - `async def compute(*collections, **kwargs)` that calls `dask.base.collections_to_dsk` / `obj.__dask_graph__()` + `__dask_keys__()` + `__dask_postcompute__()` so `dask.delayed`, `dask.bag`, and dask arrays all work
+  - Dispatch each runnable task through `_bridge.submit`, resolving already-computed dependency values into the task's arguments before pickling (workers are stateless between tasks — ship values, don't assume a shared cache)
+  - Support a `num_workers`-independent design: concurrency is bounded by the JS pool size, the scheduler just dispatches everything that is ready
+
+- [ ] Implement package mirroring in `python/pyodide_pool/_packages.py` and the JS side:
+  - Driver snapshot: read `pyodide.loadedPackages` (JS side) plus `micropip.list()` (driver Python) to build the set of packages/wheels the main instance has installed; expose `snapshot_packages()` and pass the snapshot with every `execPickled` message (the worker's installed-set makes replay cheap and idempotent — verify this rather than adding separate sync machinery)
+  - Filter out packages that cannot or need not be mirrored (e.g. `pyodide_pool` itself is shipped via cloudpickle-by-value; enable `cloudpickle` register-by-value for the `pyodide_pool` module or keep worker-executed closures self-contained)
+  - Verify with numpy: driver loads numpy, submits a lambda using numpy, worker installs numpy automatically and returns the correct array result
+
+- [ ] Create the Node demo `examples/node-dask-demo.ts` plus embedded Python driver script:
+  - Boot a main Pyodide instance in the Node main thread with `loadPyodide()`, load `dask` (it is in the Pyodide distribution) and `cloudpickle`, register the JS pool via `registerJsModule`, and install `python/pyodide_pool` into the driver (write the package files into Pyodide's FS or install from a locally built wheel)
+  - Driver script: build a `dask.delayed` graph (e.g. 8 CPU-heavy leaf tasks — the Phase 01 prime counter — feeding a `sum` reduction), run once with `dask`'s synchronous scheduler and once with `await pyodide_pool.compute(...)` on a 4-worker pool, assert identical results, print both wall-clock times and the speedup
+  - Add a second mini-demo in the same script: `dask.bag.from_sequence(...).map(...).sum()` and a numpy-using delayed task to exercise package mirroring
+  - Wire as `npm run demo:dask`
+
+- [ ] Run `npm run demo:dask` and iterate until it exits 0 with matching results and >1.5x speedup on the delayed graph. Then record `docs/notes/phase-02-results.md` (front matter `type: note`, tags `[dask, results]`, wiki-links `[[dask-scheduler-design]]`, `[[phase-01-results]]`) with measured timings, the package-mirroring behavior observed (first-task numpy install cost vs subsequent tasks), and any deviations from the design doc — update the design doc if the implementation diverged.
