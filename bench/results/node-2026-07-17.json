@@ -1,0 +1,353 @@
+{
+  "schema": 1,
+  "createdAt": "2026-07-17T06:58:53.586Z",
+  "mode": "full",
+  "context": {
+    "node": "v24.18.0",
+    "pyodideNpm": "314.0.2",
+    "pyodideRuntime": "314.0.2",
+    "platform": "linux",
+    "release": "6.6.114.1-microsoft-standard-WSL2",
+    "arch": "arm64",
+    "cpuModel": "Qualcomm ARM64 (part 0x002)",
+    "cores": 16,
+    "availableParallelism": 16
+  },
+  "config": {
+    "poolSizes": [
+      1,
+      2,
+      4,
+      8
+    ],
+    "repetitions": 3,
+    "primes": {
+      "rangeStart": 2,
+      "rangeEnd": 2000000,
+      "chunkCount": 8,
+      "expectedTotal": 148933
+    },
+    "pi": {
+      "chunkCount": 8,
+      "samplesPerChunk": 2000000
+    },
+    "matmul": {
+      "taskCount": 8,
+      "n": 256,
+      "k": 20
+    },
+    "dask": {
+      "rangeStart": 2,
+      "rangeEnd": 2000000,
+      "chunkCount": 8,
+      "expectedTotal": 148933
+    },
+    "noopReps": 10,
+    "payloadReps": 5,
+    "payloadFloats": 131072
+  },
+  "setup": [
+    {
+      "poolSize": 1,
+      "warmupWallMs": 1119.471303,
+      "workerBootMs": [
+        1058.561903
+      ],
+      "mirrorWarmMs": 837.3722999999954
+    },
+    {
+      "poolSize": 2,
+      "warmupWallMs": 1084.041115,
+      "workerBootMs": [
+        1021.9176149999985,
+        1017.7837149999978
+      ],
+      "mirrorWarmMs": 952.9410029999999
+    },
+    {
+      "poolSize": 4,
+      "warmupWallMs": 1176.8410049999948,
+      "workerBootMs": [
+        1074.5343040000007,
+        1095.3395049999963,
+        1108.6704049999971,
+        1100.972105000008
+      ],
+      "mirrorWarmMs": 1256.230898000009
+    },
+    {
+      "poolSize": 8,
+      "warmupWallMs": 1248.3671470000118,
+      "workerBootMs": [
+        1129.4698520000093,
+        1110.3272519999882,
+        1122.7670520000102,
+        1134.8005520000006,
+        1162.308051,
+        1127.986751999997,
+        1116.4863520000072,
+        1094.2674539999862
+      ],
+      "mirrorWarmMs": 1804.0249599999806
+    }
+  ],
+  "workloads": [
+    {
+      "id": "primes",
+      "title": "Prime counting (pure Python, CPU-bound)",
+      "description": "Trial-division prime counting from Phase 01; equal ranges dispatched with `pool.map()`.",
+      "totalWork": "primes in [2, 2000000) across 8 chunks",
+      "cells": [
+        {
+          "poolSize": 1,
+          "warmupMs": 5855.089129,
+          "runsMs": [
+            5800.400116999999,
+            5881.295205,
+            5856.212696000002
+          ],
+          "medianMs": 5856.212696000002,
+          "value": 148933
+        },
+        {
+          "poolSize": 2,
+          "warmupMs": 3211.279138999991,
+          "runsMs": [
+            3235.448728999996,
+            3336.4550299999974,
+            3272.192102999994
+          ],
+          "medianMs": 3272.192102999994,
+          "value": 148933
+        },
+        {
+          "poolSize": 4,
+          "warmupMs": 1974.692406999995,
+          "runsMs": [
+            1969.0626029999985,
+            1962.7557959999976,
+            1927.3463959999935
+          ],
+          "medianMs": 1962.7557959999976,
+          "value": 148933
+        },
+        {
+          "poolSize": 8,
+          "warmupMs": 1208.9488490000076,
+          "runsMs": [
+            1230.1597469999979,
+            1233.9748689999979,
+            1230.5545730000013
+          ],
+          "medianMs": 1230.5545730000013,
+          "value": 148933
+        }
+      ]
+    },
+    {
+      "id": "montecarlo-pi",
+      "title": "Monte Carlo π estimation (random-heavy pure Python)",
+      "description": "Seeded `random.Random` sampling; each chunk counts in-circle hits, dispatched with `pool.map()`.",
+      "totalWork": "16,000,000 samples across 8 chunks",
+      "cells": [
+        {
+          "poolSize": 1,
+          "warmupMs": 2692.955102,
+          "runsMs": [
+            2679.7003010000008,
+            2663.540202,
+            2675.373099999997
+          ],
+          "medianMs": 2675.373099999997,
+          "value": 12566547
+        },
+        {
+          "poolSize": 2,
+          "warmupMs": 1399.9138010000024,
+          "runsMs": [
+            1404.3194010000007,
+            1432.8418999999994,
+            1430.7221029999928
+          ],
+          "medianMs": 1430.7221029999928,
+          "value": 12566547
+        },
+        {
+          "poolSize": 4,
+          "warmupMs": 845.4959979999985,
+          "runsMs": [
+            766.4419989999878,
+            792.2920979999908,
+            811.0953979999904
+          ],
+          "medianMs": 792.2920979999908,
+          "value": 12566547
+        },
+        {
+          "poolSize": 8,
+          "warmupMs": 420.1109909999941,
+          "runsMs": [
+            416.15549100001226,
+            418.21289100000286,
+            414.21919099998195
+          ],
+          "medianMs": 416.15549100001226,
+          "value": 12566547
+        }
+      ]
+    },
+    {
+      "id": "numpy-matmul",
+      "title": "numpy batch matmul (mirrored packages + serialization)",
+      "description": "Driver Python submits cloudpickled numpy tasks via `pyodide_pool.submit`; workers mirror numpy, chain matmuls, and return the full float64 product matrix through cloudpickle.",
+      "totalWork": "8 tasks × 20 chained matmuls of 256×256",
+      "cells": [
+        {
+          "poolSize": 1,
+          "warmupMs": 2059.678899000006,
+          "runsMs": [
+            1899.3903940000018,
+            1818.2258920000022,
+            1803.1134910000037
+          ],
+          "medianMs": 1818.2258920000022,
+          "value": -200.16241619637077
+        },
+        {
+          "poolSize": 2,
+          "warmupMs": 1254.7665029999916,
+          "runsMs": [
+            1022.0936030000012,
+            1031.398503000004,
+            1048.9283029999933
+          ],
+          "medianMs": 1031.398503000004,
+          "value": -200.16241619637077
+        },
+        {
+          "poolSize": 4,
+          "warmupMs": 868.8900979999889,
+          "runsMs": [
+            646.0525990000024,
+            663.9544980000064,
+            661.6599990000104
+          ],
+          "medianMs": 661.6599990000104,
+          "value": -200.16241619637077
+        },
+        {
+          "poolSize": 8,
+          "warmupMs": 691.8580849999853,
+          "runsMs": [
+            440.17589000001317,
+            427.4348910000117,
+            446.79699000000255
+          ],
+          "medianMs": 440.17589000001317,
+          "value": -200.16241619637077
+        }
+      ]
+    },
+    {
+      "id": "dask-delayed",
+      "title": "dask.delayed reduction graph (Phase 02 scheduler)",
+      "description": "`dask.delayed` prime-count leaves feeding `sum()`, executed by the async scheduler via `pyodide_pool.compute(..., pool=...)`.",
+      "totalWork": "primes in [2, 2000000) across 8 delayed leaves",
+      "cells": [
+        {
+          "poolSize": 1,
+          "warmupMs": 6101.944972999998,
+          "runsMs": [
+            6092.491979999999,
+            6118.660615000001,
+            6013.554474999997
+          ],
+          "medianMs": 6092.491979999999,
+          "value": 148933
+        },
+        {
+          "poolSize": 2,
+          "warmupMs": 3462.880007999993,
+          "runsMs": [
+            3465.6498060000013,
+            3250.5431049999897,
+            3355.687512999997
+          ],
+          "medianMs": 3355.687512999997,
+          "value": 148933
+        },
+        {
+          "poolSize": 4,
+          "warmupMs": 2235.3350949999876,
+          "runsMs": [
+            1960.674291999996,
+            1885.4747199999983,
+            2134.6571089999925
+          ],
+          "medianMs": 1960.674291999996,
+          "value": 148933
+        },
+        {
+          "poolSize": 8,
+          "warmupMs": 1443.9926850000047,
+          "runsMs": [
+            1299.731089000008,
+            1238.997789999994,
+            1266.696289000014
+          ],
+          "medianMs": 1266.696289000014,
+          "value": 148933
+        }
+      ]
+    }
+  ],
+  "overheads": {
+    "workerBoot": {
+      "samples": [
+        1058.561903,
+        1021.9176149999985,
+        1017.7837149999978,
+        1074.5343040000007,
+        1095.3395049999963,
+        1108.6704049999971,
+        1100.972105000008,
+        1129.4698520000093,
+        1110.3272519999882,
+        1122.7670520000102,
+        1134.8005520000006,
+        1162.308051,
+        1127.986751999997,
+        1116.4863520000072,
+        1094.2674539999862
+      ],
+      "medianMs": 1108.6704049999971
+    },
+    "noopRoundTrip": {
+      "samples": [
+        1.9937999999999647,
+        2.1725000000001273,
+        4.3279,
+        0.4759000000001379,
+        0.3912000000000262,
+        0.3976000000000113,
+        0.9348999999999705,
+        0.44610000000011496,
+        0.9973999999999705,
+        0.4033000000001721
+      ],
+      "medianMs": 0.7054000000000542
+    },
+    "payloadRoundTrip": {
+      "samples": [
+        10.386100000003353,
+        9.763800000000629,
+        10.566600000005565,
+        11.63980000000447,
+        11.6379009999946
+      ],
+      "medianMs": 10.566600000005565,
+      "payloadBytes": 1048576
+    }
+  },
+  "failures": []
+}

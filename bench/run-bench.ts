@@ -295,6 +295,31 @@ async function measurePayload(
   return { samples, medianMs: median(samples), payloadBytes: config.payloadFloats * 8 }
 }
 
+/**
+ * os.cpus() reports model "unknown" on some ARM Linux machines (e.g. WSL2),
+ * where /proc/cpuinfo carries no `model name` either — only the ARM
+ * implementer/part ID registers, so fall back to those.
+ */
+function cpuModel(): string {
+  const fromOs = os.cpus()[0]?.model
+  if (fromOs !== undefined && fromOs !== '' && fromOs !== 'unknown') return fromOs
+  try {
+    const info = fs.readFileSync('/proc/cpuinfo', 'utf8')
+    const modelName = /^model name\s*:\s*(.+)$/m.exec(info)?.[1]
+    if (modelName !== undefined) return modelName.trim()
+    const implementer = /^CPU implementer\s*:\s*(\S+)$/m.exec(info)?.[1]
+    const part = /^CPU part\s*:\s*(\S+)$/m.exec(info)?.[1]
+    if (implementer !== undefined && part !== undefined) {
+      const vendors: Record<string, string> = { '0x41': 'ARM', '0x51': 'Qualcomm', '0x61': 'Apple' }
+      const vendor = vendors[implementer] ?? `implementer ${implementer}`
+      return `${vendor} ARM64 (part ${part})`
+    }
+  } catch {
+    // /proc/cpuinfo unreadable (non-Linux) — fall through to "unknown"
+  }
+  return fromOs ?? 'unknown'
+}
+
 function pyodideNpmVersion(): string | null {
   try {
     const raw = fs.readFileSync(path.join(rootDir, 'node_modules', 'pyodide', 'package.json'), 'utf8')
@@ -511,7 +536,7 @@ json.dumps(_total)
       platform: os.platform(),
       release: os.release(),
       arch: os.arch(),
-      cpuModel: os.cpus()[0]?.model ?? 'unknown',
+      cpuModel: cpuModel(),
       cores: os.cpus().length,
       availableParallelism: os.availableParallelism(),
     },
