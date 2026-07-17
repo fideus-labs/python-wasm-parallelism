@@ -49,7 +49,15 @@ async def create_pool(pool_size: int = 4, js_url: str | None = None) -> WorkerPo
     from pyodide.ffi import to_js
 
     url = DEFAULT_JS_URL if js_url is None else js_url
-    module = await run_js(f"import({url!r})")
+    # Dynamic import() resolves relative and path-absolute URLs against the
+    # REFERRER MODULE (pyodide.asm.js) — in JupyterLite that is the jsDelivr
+    # CDN, so "/files/assets/..." would 404 on cdn.jsdelivr.net. Resolve
+    # against the worker/page location instead, which is the site origin.
+    # Fully-qualified URLs (http://, file://) pass through new URL() as-is,
+    # and Node (no global `location`) keeps the raw url.
+    module = await run_js(
+        f"(u => import(typeof location === 'undefined' ? u : new URL(u, location.href).href))({url!r})"
+    )
     options = to_js({"poolSize": pool_size}, dict_converter=Object.fromEntries)
     pool = WorkerPool(module.createPool(options))
     _bridge.set_default_pool(pool)

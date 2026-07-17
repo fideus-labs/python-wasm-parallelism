@@ -212,6 +212,19 @@ async function ensurePyodide(source?: PyodideSource): Promise<{ py: PyodideAPI; 
   }
 }
 
+/**
+ * micropip module proxy, called via `callKwargs` so installs run with
+ * `deps=False`: the driver's snapshot already contains its full transitive
+ * package set, so worker-side dependency resolution is redundant — and
+ * actively harmful when the driver's index differs from PyPI (JupyterLite's
+ * piplite serves wheels PyPI does not have, whose PyPI-resolved dependency
+ * trees pull packages with no pure wheel, e.g. tornado).
+ */
+interface MicropipProxy {
+  install: { callKwargs(requirements: unknown, kwargs: { deps: boolean }): Promise<void> }
+  destroy(): void
+}
+
 async function ensurePackages(py: PyodideAPI, packages: string[]): Promise<void> {
   const missing = packages.filter((name) => !(name in py.loadedPackages))
   if (missing.length === 0) return
@@ -228,13 +241,10 @@ async function ensurePackages(py: PyodideAPI, packages: string[]): Promise<void>
 
   try {
     await py.loadPackage('micropip', { messageCallback: () => {} })
-    const micropip = py.pyimport('micropip') as {
-      install(requirements: unknown): Promise<void>
-      destroy(): void
-    }
+    const micropip = py.pyimport('micropip') as MicropipProxy
     const requirements = py.toPy(remaining) as PyProxy
     try {
-      await micropip.install(requirements)
+      await micropip.install.callKwargs(requirements, { deps: false })
     } finally {
       requirements.destroy()
       micropip.destroy()
@@ -265,13 +275,10 @@ async function ensureWheels(py: PyodideAPI, wheels: string[]): Promise<void> {
   )
   if (missing.length === 0) return
   await py.loadPackage('micropip', { messageCallback: () => {} })
-  const micropip = py.pyimport('micropip') as {
-    install(requirements: unknown): Promise<void>
-    destroy(): void
-  }
+  const micropip = py.pyimport('micropip') as MicropipProxy
   const requirements = py.toPy(missing) as PyProxy
   try {
-    await micropip.install(requirements)
+    await micropip.install.callKwargs(requirements, { deps: false })
   } catch (err) {
     throw new Error(
       `Failed to install wheel target(s) [${missing.join(', ')}] via micropip: ${errorMessage(err)}`,

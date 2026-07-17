@@ -16,8 +16,16 @@ from typing import NamedTuple
 #: Never mirrored to workers: ``pyodide_pool`` travels by value inside task
 #: payloads (it is never installed anywhere, see ``__init__``), the worker's
 #: execPickled shim loads cloudpickle itself, and micropip is the install
-#: mechanism, not a task dependency.
-EXCLUDED_FROM_MIRROR = frozenset({"pyodide_pool", "cloudpickle", "micropip"})
+#: mechanism, not a task dependency. The second group is JupyterLite kernel
+#: machinery — never a task dependency, and piplite installs it from its
+#: bundled index while reporting ``source == "pypi"``, so name-based
+#: mirroring would resolve against REAL PyPI where ``pyodide-kernel`` does
+#: not even exist (and ``ipykernel`` pulls ``tornado``, which has no pure
+#: wheel there).
+EXCLUDED_FROM_MIRROR = frozenset(
+    {"pyodide_pool", "cloudpickle", "micropip"}
+    | {"piplite", "pyodide_kernel", "ipykernel", "comm", "widgetsnbextension"}
+)
 
 #: ``pyodide.loadedPackages`` value for packages from the distribution.
 _DEFAULT_CHANNEL = "default channel"

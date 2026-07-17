@@ -141,15 +141,22 @@ json.dumps(await pyodide_pool.submit(lambda: 40 + 2))
 it('snapshot_packages splits distribution/wheels and filters excluded names', async () => {
   // Fake one distribution package and one wheel install so the split is
   // observable without network; removed again so later submits stay clean.
+  // The kernel-machinery entries replicate what JupyterLite's piplite
+  // reports (source "pypi" for wheels from its bundled index, a URL for
+  // piplite itself) — all must be dropped by EXCLUDED_FROM_MIRROR.
   const snapshot = await run<{ packages: string[]; wheels: string[] }>(`
 import json, pyodide_js, pyodide_pool
 pyodide_js.loadedPackages.fake_dist_pkg = "default channel"
 pyodide_js.loadedPackages.fake_wheel_pkg = "https://example.com/fake_wheel_pkg-1.0-py3-none-any.whl"
+pyodide_js.loadedPackages.ipykernel = "pypi"
+pyodide_js.loadedPackages.pyodide_kernel = "pypi"
+pyodide_js.loadedPackages.comm = "pypi"
+pyodide_js.loadedPackages.piplite = "http://localhost:8000/extensions/@jupyterlite/pyodide-kernel-extension/static/pypi/piplite-0.8.2-py3-none-any.whl"
 try:
     packages, wheels = pyodide_pool.snapshot_packages()
 finally:
-    delattr(pyodide_js.loadedPackages, "fake_dist_pkg")
-    delattr(pyodide_js.loadedPackages, "fake_wheel_pkg")
+    for name in ("fake_dist_pkg", "fake_wheel_pkg", "ipykernel", "pyodide_kernel", "comm", "piplite"):
+        delattr(pyodide_js.loadedPackages, name)
 json.dumps({"packages": packages, "wheels": wheels})
 `)
   // cloudpickle and micropip ARE genuinely installed (and appear in both
