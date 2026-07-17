@@ -5,3 +5,4 @@ test-results/
 _output/
 bench/results/node-smoke*
 playwright-report/
+.jupyterlite.doit.db
