@@ -164,17 +164,6 @@ http://localhost:8000/lab/index.html — the four notebooks
 - [browser-benchmarks](docs/benchmarks/browser-benchmarks.md) — headless
   Chromium via the `@bench` Playwright spec, plus the Node-vs-browser delta
 
-**Phase notes** (what was actually verified, with timings):
-
-- [phase-01-results](docs/notes/phase-01-results.md) — Node worker-pool
-  prototype
-- [phase-02-results](docs/notes/phase-02-results.md) — dask scheduler
-  end-to-end, mirroring behavior
-- [phase-04-results](docs/notes/phase-04-results.md) — browser demo,
-  Playwright suites, browser benchmarks
-- [phase-05-results](docs/notes/phase-05-results.md) — JupyterLite site,
-  nested-worker wiring, smoke test
-
 ## License
 
 [MIT](LICENSE.txt)
