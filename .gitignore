@@ -6,3 +6,5 @@ _output/
 bench/results/node-smoke*
 playwright-report/
 .jupyterlite.doit.db
+demos/jupyterlite/files/assets/
+demos/jupyterlite/files/wheels/

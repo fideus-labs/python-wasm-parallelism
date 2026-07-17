@@ -8,8 +8,9 @@
   "scripts": {
     "build": "node scripts/build.mjs",
     "build:web": "vite build",
-    "build:lite": "cd demos/jupyterlite && ../../.venv/bin/jupyter lite build",
+    "build:lite": "node scripts/build-lite-assets.mjs && cd demos/jupyterlite && ../../.venv/bin/jupyter lite build",
     "serve:lite": "node scripts/serve-lite.mjs",
+    "check:wheel": "node scripts/check-wheel.mjs",
     "dev": "vite",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit && tsc --noEmit -p web",

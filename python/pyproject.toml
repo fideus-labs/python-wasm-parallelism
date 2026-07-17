@@ -1,0 +1,24 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "pyodide-pool"
+description = "Run Python callables and dask graphs on a pool of Pyodide Web Workers (driver-side API)"
+license = "MIT"
+requires-python = ">=3.11"
+# cloudpickle is the wire format of every submitted task (_bridge); dask is
+# only needed for compute/get and stays an extra. Both resolve in Pyodide:
+# cloudpickle ships in the distribution, dask installs from PyPI via
+# micropip/piplite.
+dependencies = ["cloudpickle"]
+dynamic = ["version"]
+
+[project.optional-dependencies]
+dask = ["dask"]
+
+[tool.hatch.version]
+path = "pyodide_pool/__init__.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["pyodide_pool"]

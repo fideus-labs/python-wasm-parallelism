@@ -2,19 +2,19 @@
  * Shared fixtures for the Node test suites.
  *
  * Every suite drives the real worker bundle (dist/pyodide-worker.js) rather
- * than mocking the protocol, so the bundle build from scripts/build.mjs is
- * reproduced here exactly once per vitest fork — suites call
- * buildWorkerBundle() in beforeAll and get the same artifact the demos and
- * the library build ship. vitest runs test files sequentially
- * (fileParallelism: false in vitest.config.ts), so rebuilding the same
- * outfile from different files cannot race.
+ * than mocking the protocol: the canonical build from scripts/bundles.mjs
+ * runs exactly once per vitest fork — suites call buildWorkerBundle() in
+ * beforeAll and get the same artifact the demos and the library build ship.
+ * vitest runs test files sequentially (fileParallelism: false in
+ * vitest.config.ts), so rebuilding the same outfile from different files
+ * cannot race.
  */
 import { readFileSync, readdirSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
-import { build } from 'esbuild'
 import { loadPyodide } from 'pyodide'
 import type { PyodideAPI } from 'pyodide'
+import { buildWorkerBundle as buildCanonicalWorkerBundle } from '../scripts/bundles.mjs'
 import { PyodidePool } from '../src/index.js'
 import type { PyodidePoolOptions } from '../src/index.js'
 
@@ -35,22 +35,13 @@ export const workerFileUrl = pathToFileURL(workerFile)
 let bundlePromise: Promise<URL> | null = null
 
 /**
- * Bundle src/worker/pyodide-worker.ts with the same options as
- * scripts/build.mjs (minus sourcemap and logging) and resolve with the
- * bundle's file:// URL. Memoized: at most one build per process no matter
- * how many fixtures ask.
+ * Build dist/pyodide-worker.js via the canonical scripts/bundles.mjs
+ * definition (minus sourcemap and logging) and resolve with the bundle's
+ * file:// URL. Memoized: at most one build per process no matter how many
+ * fixtures ask.
  */
 export function buildWorkerBundle(): Promise<URL> {
-  bundlePromise ??= build({
-    bundle: true,
-    format: 'esm',
-    platform: 'neutral',
-    target: 'es2022',
-    entryPoints: [path.join(rootDir, 'src', 'worker', 'pyodide-worker.ts')],
-    outfile: workerFile,
-    external: ['pyodide'],
-    logLevel: 'silent',
-  }).then(() => workerFileUrl)
+  bundlePromise ??= buildCanonicalWorkerBundle().then(() => workerFileUrl)
   return bundlePromise
 }
 

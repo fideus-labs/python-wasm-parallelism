@@ -1,36 +1,12 @@
-// esbuild bundling for the Pyodide worker-pool demo.
+// esbuild bundling for the Pyodide worker-pool demo — `npm run build`.
 //
-// Two bundles:
-//   1. src/worker/pyodide-worker.ts -> dist/pyodide-worker.js
-//      The Web Worker entry. Bundled as ESM, platform-neutral so the same
-//      bundle loads in browsers and Node worker_threads. `pyodide` stays
-//      external: in Node it must resolve from node_modules so loadPyodide()
-//      can find the bundled WASM assets on disk; in browsers it is served
-//      separately (CDN or static assets).
-//   2. src/index.ts -> dist/index.js
-//      The library entry (PyodidePool public API). Runtime dependencies stay
-//      external — consumers install them.
-import { build } from 'esbuild'
+// The bundle definitions (what is built, what stays external, and why) live
+// in scripts/bundles.mjs, shared with the vitest suites and the JupyterLite
+// asset build; this script just runs all three with sourcemaps and logging.
+import { buildBrowserBundle, buildIndexBundle, buildWorkerBundle } from './bundles.mjs'
 
-const shared = {
-  bundle: true,
-  format: 'esm',
-  platform: 'neutral',
-  target: 'es2022',
-  sourcemap: true,
-  logLevel: 'info',
-}
-
-await build({
-  ...shared,
-  entryPoints: ['src/worker/pyodide-worker.ts'],
-  outfile: 'dist/pyodide-worker.js',
-  external: ['pyodide'],
-})
-
-await build({
-  ...shared,
-  entryPoints: ['src/index.ts'],
-  outfile: 'dist/index.js',
-  external: ['pyodide', '@fideus-labs/worker-pool', 'web-worker'],
-})
+await buildWorkerBundle({ sourcemap: true, logLevel: 'info' })
+await buildIndexBundle({ sourcemap: true, logLevel: 'info' })
+// No sourcemap: the browser bundle is copied into the JupyterLite site as a
+// single file, so a sourceMappingURL comment would just 404 there.
+await buildBrowserBundle({ logLevel: 'info' })

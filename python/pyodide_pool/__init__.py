@@ -5,6 +5,11 @@ JS creates a ``PyodidePool`` and registers it before use::
 
     pyodide.registerJsModule('js_pyodide_pool', { pool })
 
+Inside a Pyodide kernel with no JS embedder (JupyterLite notebooks), let
+``loader`` pull in the self-contained JS bundle instead::
+
+    pool = await pyodide_pool.create_pool(pool_size=4)
+
 Driver usage::
 
     import pyodide_pool
@@ -30,6 +35,7 @@ from ._bridge import (
     RemoteTraceback,
     WorkerPool,
     default_pool,
+    set_default_pool,
     submit,
 )
 from ._packages import EXCLUDED_FROM_MIRROR, PackageSnapshot, snapshot_packages
@@ -43,8 +49,10 @@ __all__ = [
     "RemoteTraceback",
     "WorkerPool",
     "compute",
+    "create_pool",
     "default_pool",
     "get",
+    "set_default_pool",
     "snapshot_packages",
     "submit",
 ]
@@ -65,4 +73,11 @@ def __getattr__(name: str) -> Any:
         value = getattr(scheduler, name)
         globals()[name] = value
         return value
+    # create_pool lives in .loader, resolved lazily for symmetry: it is only
+    # meaningful where the JS bundle is reachable (browser kernels, Node).
+    if name == "create_pool":
+        from .loader import create_pool
+
+        globals()[name] = create_pool
+        return create_pool
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

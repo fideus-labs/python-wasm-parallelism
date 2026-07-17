@@ -28,6 +28,7 @@ __all__ = [
     "RemoteTraceback",
     "WorkerPool",
     "default_pool",
+    "set_default_pool",
     "submit",
 ]
 
@@ -158,6 +159,15 @@ def default_pool() -> WorkerPool:
     if _default_pool is None:
         _default_pool = WorkerPool()
     return _default_pool
+
+
+def set_default_pool(pool: WorkerPool | None) -> None:
+    """Install ``pool`` as the process-wide default — the target of
+    module-level :func:`submit` and the dask scheduler. ``loader.create_pool``
+    calls this so notebooks never wire JS themselves; ``None`` resets to lazy
+    resolution via ``js_pyodide_pool``."""
+    global _default_pool
+    _default_pool = pool
 
 
 async def submit(func: Any, /, *args: Any, **kwargs: Any) -> Any:
