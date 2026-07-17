@@ -3,63 +3,13 @@
  * docs/benchmarks/node-benchmarks.md. Pure — reads nothing, writes nothing;
  * bench/run-bench.ts owns the filesystem (both after a bench run and via
  * `npm run bench:report`). Every number in the report is derived from the
- * results JSON, so regenerating from the same file is idempotent.
+ * results JSON, so regenerating from the same file is idempotent. Blocks
+ * shared with the browser report (bench/report-browser.ts) live in
+ * bench/report-common.ts.
  */
-import type { BenchCell, BenchResults, WorkloadResult } from './schema.js'
+import { analysisBullets, frontMatter, runWarnings, workloadSections } from './report-common.js'
+import type { BenchResults } from './schema.js'
 import { fmtMs } from './schema.js'
-
-function serialCell(workload: WorkloadResult): BenchCell | undefined {
-  return workload.cells.find((cell) => cell.poolSize === 1)
-}
-
-function speedupOf(workload: WorkloadResult, cell: BenchCell): number {
-  const serial = serialCell(workload)
-  return serial === undefined ? Number.NaN : serial.medianMs / cell.medianMs
-}
-
-function workloadTable(workload: WorkloadResult): string[] {
-  const rows = workload.cells.map((cell) => {
-    const label = cell.poolSize === 1 ? 'serial (1)' : String(cell.poolSize)
-    const speedup = speedupOf(workload, cell)
-    const efficiency = (speedup / cell.poolSize) * 100
-    return `| ${label} | ${fmtMs(cell.medianMs)} | ${speedup.toFixed(2)}× | ${efficiency.toFixed(0)}% |`
-  })
-  return [
-    '| Workers | Median wall-clock | Speedup | Efficiency |',
-    '| --- | --- | --- | --- |',
-    ...rows,
-  ]
-}
-
-/**
- * One data-driven scaling sentence per workload: headline speedup at the
- * largest pool, plus where the marginal gain from doubling workers tapers
- * (marginal < 1.4× for a 2× worker increase).
- */
-function scalingSentence(workload: WorkloadResult): string {
-  const cells = [...workload.cells].sort((a, b) => a.poolSize - b.poolSize)
-  const largest = cells.at(-1)
-  if (largest === undefined || largest.poolSize === 1) {
-    return `**${workload.title}** — no parallel cells recorded.`
-  }
-  const headline = speedupOf(workload, largest)
-  const efficiency = (headline / largest.poolSize) * 100
-  let taper: string | null = null
-  for (let i = 0; i + 1 < cells.length; i++) {
-    const a = cells[i]
-    const b = cells[i + 1]
-    if (a === undefined || b === undefined || b.poolSize !== a.poolSize * 2) continue
-    const marginal = speedupOf(workload, b) / speedupOf(workload, a)
-    if (marginal < 1.4 && taper === null) {
-      const unit = a.poolSize === 1 ? 'worker' : 'workers'
-      taper = ` Gains taper past ${a.poolSize} ${unit} (${a.poolSize}→${b.poolSize} only added ${marginal.toFixed(2)}× where ideal is 2×).`
-    }
-  }
-  return (
-    `**${workload.title}** reaches ${headline.toFixed(2)}× on ${largest.poolSize} workers ` +
-    `(${efficiency.toFixed(0)}% efficiency).${taper ?? ' Scaling holds through the largest pool measured.'}`
-  )
-}
 
 export function generateReport(results: BenchResults, resultsRelPath: string): string {
   const created = results.createdAt.slice(0, 10)
@@ -72,18 +22,12 @@ export function generateReport(results: BenchResults, resultsRelPath: string): s
   const perMiB = (payload.medianMs - noop.medianMs) / payloadMiB
 
   const lines: string[] = [
-    '---',
-    'type: report',
-    'title: Node.js Benchmarks',
-    `created: ${created}`,
-    'tags:',
-    '  - benchmark',
-    '  - node',
-    '  - pyodide',
-    'related:',
-    "  - '[[phase-02-results]]'",
-    "  - '[[browser-benchmarks]]'",
-    '---',
+    ...frontMatter(
+      'Node.js Benchmarks',
+      created,
+      ['benchmark', 'node', 'pyodide'],
+      ['phase-02-results', 'browser-benchmarks'],
+    ),
     '',
     '# Node.js Benchmarks',
     '',
@@ -95,23 +39,7 @@ export function generateReport(results: BenchResults, resultsRelPath: string): s
     '[[phase-02-results]]; the browser counterpart of this report is',
     '[[browser-benchmarks]] (Phase 04).',
     '',
-  ]
-
-  if (results.mode === 'smoke') {
-    lines.push(
-      '> [!WARNING]',
-      '> Smoke-mode run: tiny workloads and a reduced matrix, used only to',
-      '> validate the harness. Numbers are not representative.',
-      '',
-    )
-  }
-  if (results.failures.length > 0) {
-    lines.push('> [!CAUTION]', '> This run recorded verification failures:')
-    for (const failure of results.failures) lines.push(`> - ${failure}`)
-    lines.push('')
-  }
-
-  lines.push(
+    ...runWarnings(results),
     '## Environment',
     '',
     '| | |',
@@ -124,26 +52,7 @@ export function generateReport(results: BenchResults, resultsRelPath: string): s
     `| Pool sizes | ${config.poolSizes.map((s) => (s === 1 ? '1 (serial)' : String(s))).join(', ')} |`,
     `| Repetitions | ${config.repetitions} timed (median reported) after 1 untimed warmup run per cell |`,
     '',
-    '## Workloads',
-    '',
-    'Every cell runs the same fixed total work; pools are warmed (interpreters',
-    'booted, packages installed/mirrored) before timing, and each cell runs one',
-    'additional untimed warmup repetition. Efficiency = speedup ÷ workers.',
-    '',
-  )
-
-  for (const workload of results.workloads) {
-    lines.push(
-      `### ${workload.title}`,
-      '',
-      `${workload.description} Fixed total work: ${workload.totalWork}.`,
-      '',
-      ...workloadTable(workload),
-      '',
-    )
-  }
-
-  lines.push(
+    ...workloadSections(results),
     '## Overheads',
     '',
     '| Overhead | Median | Samples |',
@@ -158,13 +67,7 @@ export function generateReport(results: BenchResults, resultsRelPath: string): s
     '',
     '## Analysis',
     '',
-  )
-
-  for (const workload of results.workloads) {
-    lines.push(`- ${scalingSentence(workload)}`)
-  }
-
-  lines.push(
+    ...analysisBullets(results),
     '',
     `Boot amortization: each worker pays a one-time Pyodide boot of ~${fmtMs(boot.medianMs)}`,
     `(median across ${boot.samples.length} cold boots). Warmup boots interpreters in parallel, so a`,
@@ -186,7 +89,7 @@ export function generateReport(results: BenchResults, resultsRelPath: string): s
     'as the chunk count divides evenly across workers — the taper points above',
     'mark where per-task overhead and shared-machine effects win instead.',
     '',
-  )
+  ]
 
   return lines.join('\n')
 }

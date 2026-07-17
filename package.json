@@ -15,6 +15,7 @@
     "demo:dask": "npm run build && tsx examples/node-dask-demo.ts",
     "bench": "tsx bench/run-bench.ts",
     "bench:report": "tsx bench/run-bench.ts --report-only",
+    "bench:report:browser": "tsx bench/report-browser-cli.ts",
     "test": "vitest run",
     "test:browser": "playwright test --grep-invert @bench"
   },
