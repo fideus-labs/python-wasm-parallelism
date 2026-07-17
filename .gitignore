@@ -10,3 +10,4 @@ demos/jupyterlite/files/assets/
 demos/jupyterlite/files/wheels/
 demos/jupyterlite/pypi/
 demos/jupyterlite/.cache/
+.serena/
