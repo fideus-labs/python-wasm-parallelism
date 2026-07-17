@@ -23,6 +23,9 @@ export const rootDir = fileURLToPath(new URL('..', import.meta.url))
 /** Source directory of the driver-side Python package (python/pyodide_pool). */
 export const packageDir = path.join(rootDir, 'python', 'pyodide_pool')
 
+/** Source directory of the multiprocessing shim (python/wasm_multiprocessing). */
+export const shimDir = path.join(rootDir, 'python', 'wasm_multiprocessing', 'wasm_multiprocessing')
+
 /** Absolute path of the worker bundle the suites (and demos) load. */
 export const workerFile = path.join(rootDir, 'dist', 'pyodide-worker.js')
 
@@ -152,5 +155,25 @@ await micropip.install("dask")
 import dask, pyodide_pool
 await asyncio.gather(*(pyodide_pool.submit(lambda i=i: i) for i in range(${pool.poolSize})))
 `)
+  return handle
+}
+
+/**
+ * {@link bootDriver}, then "install" python/wasm_multiprocessing beside
+ * pyodide_pool in the driver's FS and import it. The driver-side copy is the
+ * whole install: workers never import the shim (it is EXCLUDED_FROM_MIRROR
+ * and its chunk runners travel to workers by value inside the pickled task).
+ */
+export async function bootMultiprocessingDriver(pool: PyodidePool): Promise<PyodideDriver> {
+  const handle = await bootDriver(pool)
+  handle.api.FS.mkdirTree('/driver-site/wasm_multiprocessing')
+  for (const name of readdirSync(shimDir)) {
+    if (!name.endsWith('.py')) continue
+    handle.api.FS.writeFile(
+      `/driver-site/wasm_multiprocessing/${name}`,
+      readFileSync(path.join(shimDir, name), 'utf8'),
+    )
+  }
+  await handle.api.runPythonAsync('import wasm_multiprocessing')
   return handle
 }
