@@ -1,67 +1,35 @@
 /**
  * Integration tests for the driver-side Python package (python/pyodide_pool).
  *
- * Boots a REAL driver Pyodide in the (fork's) main thread, registers a real
- * 2-worker PyodidePool as `js_pyodide_pool`, writes the package sources into
- * the driver's FS, and exercises the bridge end-to-end: cloudpickle payloads
- * out, results and remote exceptions back — the exact topology of
+ * Boots a REAL driver Pyodide in the (fork's) main thread wired to a real
+ * 2-worker PyodidePool via the shared bootDriver fixture (tests/helpers.ts)
+ * and exercises the bridge end-to-end: cloudpickle payloads out, results and
+ * remote exceptions back — the exact topology of
  * docs/architecture/dask-scheduler-design.md. Tests share one driver and one
  * pool and run sequentially; each driver snippet ends in a json.dumps(...)
  * expression so assertions stay independent of PyProxy conversion rules.
  * The package-mirroring test boots its own 1-worker pool (and loads numpy
  * into the driver), so it must stay last in the file.
  */
-import { readFileSync, readdirSync } from 'node:fs'
-import path from 'node:path'
-import { fileURLToPath, pathToFileURL } from 'node:url'
-import { build } from 'esbuild'
-import { loadPyodide } from 'pyodide'
-import type { PyodideAPI } from 'pyodide'
 import { afterAll, beforeAll, expect, it } from 'vitest'
-import { PyodidePool } from '../src/index.js'
-
-const rootDir = fileURLToPath(new URL('..', import.meta.url))
-const workerFile = path.join(rootDir, 'dist', 'pyodide-worker.js')
-const packageDir = path.join(rootDir, 'python', 'pyodide_pool')
+import type { PyodidePool } from '../src/index.js'
+import { bootDriver, createPool } from './helpers.js'
+import type { PyodideDriver } from './helpers.js'
 
 let pool: PyodidePool
-let driver: PyodideAPI
+let driver: PyodideDriver
 
-/** Run driver Python ending in a json.dumps(...) expression; parse it. */
 async function run<T>(code: string): Promise<T> {
-  const result: unknown = await driver.runPythonAsync(code)
-  return JSON.parse(String(result)) as T
+  return driver.run<T>(code)
 }
 
 beforeAll(async () => {
-  await build({
-    bundle: true,
-    format: 'esm',
-    platform: 'neutral',
-    target: 'es2022',
-    entryPoints: [path.join(rootDir, 'src', 'worker', 'pyodide-worker.ts')],
-    outfile: workerFile,
-    external: ['pyodide'],
-    logLevel: 'silent',
-  })
-  pool = new PyodidePool({ poolSize: 2, workerUrl: pathToFileURL(workerFile) })
-  driver = await loadPyodide()
-  driver.registerJsModule('js_pyodide_pool', { pool })
-  // cloudpickle for the bridge; micropip so snapshot_packages exercises a
-  // real micropip.list() (both are excluded-from-mirror names).
-  await driver.loadPackage(['cloudpickle', 'micropip'], { messageCallback: () => {} })
-  // "Install" the package by writing its sources into the driver's FS.
-  driver.FS.mkdirTree('/driver-site/pyodide_pool')
-  for (const name of readdirSync(packageDir)) {
-    if (!name.endsWith('.py')) continue
-    driver.FS.writeFile(
-      `/driver-site/pyodide_pool/${name}`,
-      readFileSync(path.join(packageDir, name), 'utf8'),
-    )
-  }
-  await driver.runPythonAsync(
-    "import sys; sys.path.insert(0, '/driver-site'); import pyodide_pool",
-  )
+  // bootDriver loads cloudpickle for the bridge and micropip so
+  // snapshot_packages exercises a real micropip.list() (both are
+  // excluded-from-mirror names), and "installs" python/pyodide_pool by
+  // writing its sources into the driver's FS.
+  pool = await createPool(2)
+  driver = await bootDriver(pool)
 })
 
 afterAll(() => {
@@ -198,13 +166,13 @@ it('mirrors numpy to workers automatically; snapshot replay is idempotent', asyn
   // cheap and idempotent is the design's substitute for a driver/worker
   // package-sync protocol. (The wheels/micropip mirror path gets the same
   // treatment from the scheduler suite, which mirrors PyPI dask to workers.)
-  const numpyPool = new PyodidePool({ poolSize: 1, workerUrl: pathToFileURL(workerFile) })
+  const numpyPool = await createPool(1)
   try {
     const [fresh] = await numpyPool.warmup()
     expect(fresh?.status.loadedPackages).not.toContain('numpy')
 
-    await driver.loadPackage('numpy', { messageCallback: () => {} })
-    driver.registerJsModule('js_numpy_pool', { pool: numpyPool })
+    await driver.api.loadPackage('numpy', { messageCallback: () => {} })
+    driver.api.registerJsModule('js_numpy_pool', { pool: numpyPool })
     const info = await run<{
       snapshot_has_numpy: boolean
       snapshot_calls: number

@@ -9,13 +9,19 @@
  * (fileParallelism: false in vitest.config.ts), so rebuilding the same
  * outfile from different files cannot race.
  */
+import { readFileSync, readdirSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { build } from 'esbuild'
+import { loadPyodide } from 'pyodide'
+import type { PyodideAPI } from 'pyodide'
 import { PyodidePool } from '../src/index.js'
 import type { PyodidePoolOptions } from '../src/index.js'
 
 export const rootDir = fileURLToPath(new URL('..', import.meta.url))
+
+/** Source directory of the driver-side Python package (python/pyodide_pool). */
+export const packageDir = path.join(rootDir, 'python', 'pyodide_pool')
 
 /** Absolute path of the worker bundle the suites (and demos) load. */
 export const workerFile = path.join(rootDir, 'dist', 'pyodide-worker.js')
@@ -101,4 +107,59 @@ export async function unpickle<T>(
     globals: { data: Array.from(new Uint8Array(payload)) },
     packages: ['cloudpickle'],
   })
+}
+
+/** A driver Pyodide booted in the (fork's) main thread, wired to a pool. */
+export interface PyodideDriver {
+  /** The raw driver instance (loadPackage, registerJsModule, FS, ...). */
+  api: PyodideAPI
+  /** Run driver Python ending in a json.dumps(...) expression; parse it. */
+  run<T>(code: string): Promise<T>
+}
+
+/**
+ * Boot a REAL driver Pyodide in the main thread and wire it to `pool` — the
+ * exact topology of examples/node-dask-demo.ts: register the pool as
+ * `js_pyodide_pool`, load cloudpickle (bridge) + micropip (mirroring),
+ * "install" python/pyodide_pool by writing its sources into the driver's FS,
+ * and import it. Assertions should go through `run` so they stay independent
+ * of PyProxy conversion rules.
+ */
+export async function bootDriver(pool: PyodidePool): Promise<PyodideDriver> {
+  const api = await loadPyodide()
+  api.registerJsModule('js_pyodide_pool', { pool })
+  await api.loadPackage(['cloudpickle', 'micropip'], { messageCallback: () => {} })
+  api.FS.mkdirTree('/driver-site/pyodide_pool')
+  for (const name of readdirSync(packageDir)) {
+    if (!name.endsWith('.py')) continue
+    api.FS.writeFile(
+      `/driver-site/pyodide_pool/${name}`,
+      readFileSync(path.join(packageDir, name), 'utf8'),
+    )
+  }
+  await api.runPythonAsync("import sys; sys.path.insert(0, '/driver-site'); import pyodide_pool")
+  return {
+    api,
+    run: async <T>(code: string): Promise<T> => {
+      const result: unknown = await api.runPythonAsync(code)
+      return JSON.parse(String(result)) as T
+    },
+  }
+}
+
+/**
+ * {@link bootDriver}, then install dask from PyPI via micropip (dask is NOT
+ * in the Pyodide distribution) and occupy every worker once so each mirrors
+ * the driver's snapshot (dask and its dependencies) up front instead of
+ * skewing the first timing-sensitive test.
+ */
+export async function bootDaskDriver(pool: PyodidePool): Promise<PyodideDriver> {
+  const handle = await bootDriver(pool)
+  await handle.api.runPythonAsync(`
+import asyncio, micropip
+await micropip.install("dask")
+import dask, pyodide_pool
+await asyncio.gather(*(pyodide_pool.submit(lambda i=i: i) for i in range(${pool.poolSize})))
+`)
+  return handle
 }
