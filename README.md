@@ -56,7 +56,10 @@ results re-raise the original Python exception on the driver with the
 remote traceback chained. The whole stack is **async-first**: blocking a
 driver thread starves the event loop the pool lives on (measured, not
 assumed — see the [spikes](docs/architecture/spikes/)), so synchronous
-facades exist only where JSPI stack-switching makes them safe.
+facades exist only where JSPI stack-switching makes them safe. Pool tasks
+themselves run under stack switching where the runtime has it (Node 25+,
+Chrome 137+): a task may block on an awaitable with `pyodide.ffi.run_sync`
+or be a coroutine function.
 
 Measured on 4 workers: ~3× on pure-Python prime counting, Node and browser
 within 4% of each other; per-task floor ~0.7 ms + ~10 ms/MiB of payload;

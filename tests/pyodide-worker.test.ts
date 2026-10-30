@@ -234,6 +234,41 @@ it('execPickled ships lambdas by value (cloudpickle, not pickle)', async () => {
   await expect(unpickle(response.payload)).resolves.toBe(42)
 })
 
+// The shim runs each task through PyProxy.callPromising (stack switching),
+// so a task may block with pyodide.ffi.run_sync and may itself be a coroutine
+// function. Node >= 25 has JSPI on by default; Node 24 only with
+// --experimental-wasm-jspi, and without it these tasks fail in run_sync.
+const stackSwitching = 'Suspending' in WebAssembly
+
+it.runIf(stackSwitching)('execPickled runs the task with stack switching so it can run_sync', async () => {
+  const payload = await pickleCall(
+    '((lambda: (__import__("pyodide").ffi.can_run_sync(), ' +
+      '__import__("pyodide").ffi.run_sync(__import__("asyncio").sleep(0, "slept")))), (), {})',
+  )
+  const response = await requestPickled(worker, {
+    id: nextId++,
+    kind: 'execPickled',
+    payload,
+    packages: [],
+    wheels: [],
+  })
+  if (!response.ok) throw new Error(`Expected ok response, got: ${response.error.message}`)
+  await expect(unpickle(response.payload)).resolves.toEqual([true, 'slept'])
+})
+
+it.runIf(stackSwitching)('execPickled finishes a coroutine function task and pickles its value', async () => {
+  const payload = await pickleCall('(__import__("asyncio").sleep, (0,), {"result": "awaited"})')
+  const response = await requestPickled(worker, {
+    id: nextId++,
+    kind: 'execPickled',
+    payload,
+    packages: [],
+    wheels: [],
+  })
+  if (!response.ok) throw new Error(`Expected ok response, got: ${response.error.message}`)
+  await expect(unpickle(response.payload)).resolves.toBe('awaited')
+})
+
 it('execPickled failures carry the traceback and a pickled exception', async () => {
   const payload = await pickleCall('((lambda: 1 / 0), (), {})')
   const response = await requestPickled(worker, {
