@@ -32,11 +32,10 @@ describe('self-containment', () => {
     expect(bundleText).not.toMatch(/import\(["']@fideus-labs\/worker-pool["']\)/)
   })
 
-  it('keeps pyodide and web-worker as dynamic-only imports', () => {
+  it('keeps pyodide as a dynamic-only import', () => {
     // Never executed in browsers: workers get a CDN moduleURL on every
-    // request, and `Worker` exists globally so the polyfill path is dead.
+    // request.
     expect(bundleText).toContain('import("pyodide")')
-    expect(bundleText).toContain('import("web-worker")')
   })
 
   it('embeds the worker bundle source', () => {

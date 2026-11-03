@@ -5,6 +5,9 @@
   "type": "module",
   "description": "Parallel CPU-bound Python in WebAssembly: a pool of Pyodide-running Web Workers driven by @fideus-labs/worker-pool",
   "license": "MIT",
+  "engines": {
+    "node": ">=22.3"
+  },
   "scripts": {
     "build": "node scripts/build.mjs",
     "build:web": "vite build",
@@ -23,9 +26,8 @@
     "test:browser": "playwright test --grep-invert @bench"
   },
   "dependencies": {
-    "@fideus-labs/worker-pool": "^1.0.0",
-    "pyodide": "^314.0.2",
-    "web-worker": "^1.5.0"
+    "@fideus-labs/worker-pool": "^2.1.0",
+    "pyodide": "^314.0.2"
   },
   "devDependencies": {
     "@playwright/test": "^1.61.1",

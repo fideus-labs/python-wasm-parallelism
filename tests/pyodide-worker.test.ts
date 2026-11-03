@@ -2,14 +2,15 @@
  * Integration tests for the Pyodide worker message protocol.
  *
  * Drives the real bundle (built by tests/helpers.ts exactly like
- * scripts/build.mjs) inside Node worker_threads through the `web-worker`
- * polyfill — the same runtime path PyodidePool uses. The raw request/
+ * scripts/build.mjs) inside Node worker_threads through worker-pool's
+ * `createWorker` — the same runtime path PyodidePool uses. The raw request/
  * response plumbing is deliberately local to this file: exercising the
  * protocol without PyodidePool is the point. Tests within this file run
  * sequentially and share one booted worker; boot-sensitive tests (unbooted
  * ping, first-exec boot, warmup ping) are ordered accordingly.
  */
-import Worker from 'web-worker'
+import { createWorker } from '@fideus-labs/worker-pool'
+import type { WorkerLike } from '@fideus-labs/worker-pool'
 import { afterAll, beforeAll, expect, it } from 'vitest'
 import type {
   ExecPickledRequest,
@@ -21,12 +22,12 @@ import type {
 } from '../src/worker/pyodide-worker.js'
 import { buildWorkerBundle } from './helpers.js'
 
-let worker: Worker
+let worker: WorkerLike
 let nextId = 1
 
-function request<T = unknown>(target: Worker, message: WorkerRequest): Promise<WorkerResponse<T>> {
+function request<T = unknown>(target: WorkerLike, message: WorkerRequest): Promise<WorkerResponse<T>> {
   return new Promise((resolve) => {
-    const onMessage = (event: MessageEvent) => {
+    const onMessage = (event: { data: unknown }) => {
       const response = event.data as WorkerResponse<T>
       if (typeof response === 'object' && response !== null && response.id === message.id) {
         target.removeEventListener('message', onMessage)
@@ -44,7 +45,7 @@ function expectOk<T>(response: WorkerResponse<T>): WorkerSuccess<T> {
 }
 
 beforeAll(async () => {
-  worker = new Worker(await buildWorkerBundle(), { type: 'module' })
+  worker = createWorker(await buildWorkerBundle())
 })
 
 afterAll(() => {
@@ -149,7 +150,7 @@ it('ping after boot reports status and Pyodide version', async () => {
 })
 
 it('ping with boot: true boots a fresh worker (pool warmup path)', async () => {
-  const fresh = new Worker(await buildWorkerBundle(), { type: 'module' })
+  const fresh = createWorker(await buildWorkerBundle())
   try {
     const response = expectOk(
       await request<PingStatus>(fresh, { id: nextId++, kind: 'ping', boot: true }),
@@ -167,9 +168,12 @@ it('ping with boot: true boots a fresh worker (pool warmup path)', async () => {
 // worker (as a list of ints — always structured-clone-safe), so the tests
 // stay independent of any host-side pickle implementation.
 
-function requestPickled(target: Worker, message: ExecPickledRequest): Promise<ExecPickledResponse> {
+function requestPickled(
+  target: WorkerLike,
+  message: ExecPickledRequest,
+): Promise<ExecPickledResponse> {
   return new Promise((resolve) => {
-    const onMessage = (event: MessageEvent) => {
+    const onMessage = (event: { data: unknown }) => {
       const response = event.data as ExecPickledResponse
       if (typeof response === 'object' && response !== null && response.id === message.id) {
         target.removeEventListener('message', onMessage)
