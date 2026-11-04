@@ -25,33 +25,55 @@ demonstrates the intended usage pattern).
 ## The task function contract
 
 The pool never creates workers itself. Every task function receives an
-available `Worker` **or `null`**, and must return both the worker (for
-recycling) and the result:
+available worker **or `null`**, and must return both the worker (for
+recycling) and the result. Workers are typed as `WorkerLike` — the
+`postMessage`/`terminate`/`addEventListener`/`removeEventListener` slice that
+a browser `Worker` and worker-pool's Node `NodeWorker` both satisfy:
 
 ```typescript
 type WorkerPoolTask<T> = (
-  worker: Worker | null
-) => Promise<{ worker: Worker; result: T }>
+  worker: WorkerLike | null
+) => Promise<{ worker: WorkerLike; result: T }>
 ```
 
 - `worker === null` → the pool wants a **new worker created by the task**:
-  `const w = worker ?? new Worker(workerUrl, { type: 'module' })`.
+  `const w = worker ?? createWorker(workerUrl)` (a module `Worker` in
+  browsers, a `NodeWorker` over `worker_threads` in Node). Bundlers only
+  detect a worker entry point from a literal
+  `new Worker(new URL('./w.js', import.meta.url), { type: 'module' })`, so a
+  bundled browser app must ship the worker asset some other way (a `?worker`
+  import, a copied asset) and pass its URL — which is what this project does.
 - `worker !== null` → a **recycled** worker; reuse it as-is.
-- The task installs its own `onmessage` handler, posts its request, and
+- The task installs its own message listener, posts its request, and
   resolves `{ worker: w, result }` when the reply arrives. Because each task
-  sets `onmessage` (or an id-matched listener) itself, the natural worker
-  protocol is **one request → one response per task**.
+  attaches (and detaches) an id-matched listener itself, the natural worker
+  protocol is **one request → one response per task**. Handle `'error'` too,
+  or a failing worker leaves `onIdle()`/`runTasks()` pending forever.
 
 Canonical task factory from the README:
 
 ```typescript
 function createTask(input: number) {
-  return (worker: Worker | null) => {
-    const w = worker ?? new Worker(workerUrl, { type: 'module' })
-    return new Promise<{ worker: Worker; result: number }>((resolve) => {
-      w.onmessage = (e) => resolve({ worker: w, result: e.data })
+  return async (worker: WorkerLike | null) => {
+    const w = worker ?? createWorker(workerUrl)
+    const result = await new Promise<number>((resolve, reject) => {
+      const onMessage = (e: { data: number }) => {
+        detach()
+        resolve(e.data)
+      }
+      const onError = (e: { message: string }) => {
+        detach()
+        reject(new Error(e.message))
+      }
+      const detach = () => {
+        w.removeEventListener('message', onMessage)
+        w.removeEventListener('error', onError)
+      }
+      w.addEventListener('message', onMessage)
+      w.addEventListener('error', onError)
       w.postMessage(input)
     })
+    return { worker: w, result }
   }
 }
 ```
@@ -98,8 +120,9 @@ already-loaded packages. With recycling:
    → one `add()`/`onIdle()` (or single-element `runTasks`), `map()` →
    `runTasks()` exposing `(completed, total)` progress and `cancel(runId)`.
 2. The task factory owns worker creation, so **environment-awareness lives
-   there**: in Node construct `web-worker`'s polyfilled `Worker` over
-   `worker_threads`; in browsers use the global `Worker` — same contract.
+   there**: worker-pool's `createWorker` returns the global `Worker` in
+   browsers and its `NodeWorker` (over `worker_threads`) in Node — same
+   contract.
 3. Because each task rebinds message handling, use a **unique message `id` per
    task** and match the response on that `id` (guards against stray messages
    from a recycled worker's previous life).

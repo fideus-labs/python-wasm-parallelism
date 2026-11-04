@@ -11,10 +11,9 @@
  * loader.py), where no bundler resolves asset URLs and the pool's workers
  * are NESTED workers.
  *
- * `pyodide` and `web-worker` stay external as dynamic-only imports: workers
- * boot Pyodide from the moduleURL carried by each request (defaulting to the
- * jsDelivr CDN pinned to the bundled version below), and the web-worker
- * polyfill path is never taken where `Worker` exists globally.
+ * `pyodide` stays external as a dynamic-only import: workers boot Pyodide
+ * from the moduleURL carried by each request (defaulting to the jsDelivr CDN
+ * pinned to the bundled version below).
  */
 import { PyodidePool } from './pool/pyodide-pool.js'
 import type { PyodidePoolOptions } from './pool/pyodide-pool.js'

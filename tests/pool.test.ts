@@ -3,8 +3,8 @@
  *
  * tests/helpers.ts builds dist/pyodide-worker.js exactly like
  * scripts/build.mjs; this suite then drives a real 2-worker pool in Node —
- * the environment-aware factory resolves the `web-worker` polyfill because
- * Node has no global Worker. One pool is shared across tests to amortize
+ * worker-pool's `createWorker` spawns worker_threads because Node has no
+ * global Worker. One pool is shared across tests to amortize
  * interpreter boots; the warmup test runs first because it asserts on fresh
  * (bootMs > 0) workers. Tests that need their own pool size use withPool(),
  * which guarantees terminate().
@@ -68,6 +68,25 @@ it('runPython rejects with PyodideTaskError carrying the Python traceback', asyn
 
 it('pool keeps serving after a failed task (worker was recycled, not lost)', async () => {
   await expect(pool.runPython<number>('40 + 2')).resolves.toBe(42)
+})
+
+it('a worker that fails to load surfaces as a PyodideTaskError and never hangs', async () => {
+  // The 'error' event path of worker-pool's NodeWorker: the thread never
+  // starts, so the exchange must settle, and the dead worker must be replaced
+  // (not re-posted to) on the next request.
+  const broken = new PyodidePool({
+    poolSize: 1,
+    workerUrl: pathToFileURL(path.join(rootDir, 'dist', 'no-such-worker.js')),
+  })
+  try {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const error = await broken.runPython('1').catch((err: unknown) => err)
+      expect(error).toBeInstanceOf(PyodideTaskError)
+      expect((error as PyodideTaskError).message).toMatch(/^Worker error before response: /)
+    }
+  } finally {
+    broken.terminate()
+  }
 })
 
 it('map over N > poolSize items returns ordered results (template injects item and index)', async () => {

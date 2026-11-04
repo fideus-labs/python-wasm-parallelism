@@ -30,8 +30,8 @@ export const shimDir = path.join(rootDir, 'python', 'wasm_multiprocessing', 'was
 export const workerFile = path.join(rootDir, 'dist', 'pyodide-worker.js')
 
 /**
- * file:// URL of the worker bundle — the `web-worker` polyfill resolves
- * relative paths against process.cwd(), so pools must get an absolute URL.
+ * file:// URL of the worker bundle — Node's worker_threads resolve relative
+ * paths against process.cwd(), so pools must get an absolute URL.
  */
 export const workerFileUrl = pathToFileURL(workerFile)
 

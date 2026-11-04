@@ -122,11 +122,12 @@ Handling order per message:
 4. Post the response with the result buffer in the transfer list.
 
 The pool-side contract from Phase 01 is preserved: protocol tasks always
-*resolve* with a `WorkerResponse` (a rejected task would permanently shrink
-the worker-pool), errors are unwrapped after recycling, and the exchange
-stays one-request/one-response matched on `id`. The only mechanical change to
-`PyodidePool.exchange` is an optional transfer list on `postMessage` (the
-`web-worker` Node polyfill forwards transfer lists to `worker_threads`).
+*resolve* with a `WorkerResponse` (worker-pool terminates a rejected task's
+worker, discarding its booted interpreter), errors are unwrapped after
+recycling, and the exchange stays one-request/one-response matched on `id`.
+The only mechanical change to `PyodidePool.exchange` is an optional transfer
+list on `postMessage` (worker-pool's `NodeWorker` forwards transfer lists to
+`worker_threads`).
 
 New `PyodidePool` methods, both built on `pool.runTasks` so progress
 reporting and `cancel(runId)` keep working:

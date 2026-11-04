@@ -11,9 +11,9 @@
  * the booted interpreter (and its imported modules) on every later request.
  *
  * The same ESM bundle (dist/pyodide-worker.js, `pyodide` kept external) runs
- * in browser Web Workers and in Node worker_threads via the `web-worker`
- * polyfill, which emulates WorkerGlobalScope (`self`, `postMessage`,
- * `addEventListener`) around this module. Where `loadPyodide` comes from is
+ * in browser Web Workers and in Node worker_threads (spawned by worker-pool's
+ * `NodeWorker`), where `parentPort` is adapted to the WorkerGlobalScope
+ * slice used here (see `resolveScope`). Where `loadPyodide` comes from is
  * decided per request via {@link PyodideSource}: by default the bare
  * `pyodide` import (Node resolves the WASM assets from node_modules);
  * browser embedders pass a CDN module URL instead, because bare specifiers
@@ -157,12 +157,41 @@ type PyDictProxy = PyProxy & {
 }
 
 // Narrow view of the worker global scope; keeps us independent of the
-// DOM-vs-WebWorker lib skew and matches web-worker's Node shim exactly.
+// DOM-vs-WebWorker lib skew and is all a Node parentPort has to emulate.
 interface WorkerScope {
   addEventListener(type: 'message', listener: (event: { data: unknown }) => void): void
-  postMessage(message: unknown, transfer?: Transferable[]): void
+  postMessage(message: unknown, transfer?: ArrayBuffer[]): void
 }
-const scope = globalThis as unknown as WorkerScope
+
+/**
+ * Browsers provide a WorkerGlobalScope; a Node worker_thread has no global
+ * `postMessage`, only `parentPort`, so adapt it. `process.getBuiltinModule`
+ * (Node >= 22.3) loads it synchronously and without an import specifier
+ * that browser bundlers would try to resolve.
+ */
+function resolveScope(): WorkerScope {
+  const global = globalThis as Partial<WorkerScope> & {
+    process?: { getBuiltinModule(id: string): unknown }
+  }
+  if (typeof global.postMessage === 'function') return global as WorkerScope
+  // Typed structurally: the web tsconfig has no @types/node.
+  const { parentPort } = global.process!.getBuiltinModule('node:worker_threads') as {
+    parentPort: {
+      on(event: 'message', listener: (data: unknown) => void): void
+      postMessage(message: unknown, transfer?: ArrayBuffer[]): void
+    } | null
+  }
+  if (parentPort === null) throw new Error('pyodide-worker must run inside a worker thread')
+  return {
+    addEventListener: (_type, listener) => {
+      parentPort.on('message', (data) => listener({ data }))
+    },
+    postMessage: (message, transfer) => {
+      parentPort.postMessage(message, transfer)
+    },
+  }
+}
+const scope = resolveScope()
 
 const now = (): number => performance.now()
 
@@ -502,12 +531,12 @@ function isRequest(data: unknown): data is WorkerRequest {
 }
 
 /** Buffers moved (not copied) with an execPickled response. */
-function execPickledTransfer(response: ExecPickledResponse): Transferable[] {
+function execPickledTransfer(response: ExecPickledResponse): ArrayBuffer[] {
   if (response.ok) return [response.payload]
   return response.error.exceptionPayload === undefined ? [] : [response.error.exceptionPayload]
 }
 
-function post(response: WorkerResponse | ExecPickledResponse, transfer?: Transferable[]): void {
+function post(response: WorkerResponse | ExecPickledResponse, transfer?: ArrayBuffer[]): void {
   try {
     scope.postMessage(response, transfer)
   } catch (err) {

@@ -6,19 +6,25 @@
  * cancellation all come from the pool; this class adds the one-request/
  * one-response Pyodide message protocol on top.
  *
- * Two worker-pool behaviors (verified against worker-pool 1.0.0) shape the
+ * Two worker-pool behaviors (verified against worker-pool 2.1.0) shape the
  * implementation:
  *
- * - A task function that REJECTS permanently removes its worker slot from
- *   the pool (the catch path never pushes the worker back). Task functions
- *   here therefore always resolve with the raw `WorkerResponse`; failures
- *   are unwrapped into thrown `PyodideTaskError`s only after the pool has
- *   recycled the worker.
+ * - A task function that REJECTS fails its whole batch, and the pool
+ *   terminates the worker it was lent — a booted interpreter thrown away
+ *   over one Python exception. Task functions here therefore always resolve
+ *   with the raw `WorkerResponse`; failures are unwrapped into thrown
+ *   `PyodideTaskError`s only after the pool has recycled the worker.
  * - `runTasks([])` never settles (resolution is driven by task completion),
  *   so `map()` short-circuits on empty input.
  */
-import { WorkerPool } from '@fideus-labs/worker-pool'
-import type { WorkerPoolProgressCallback, WorkerPoolTask } from '@fideus-labs/worker-pool'
+import { WorkerPool, createWorker } from '@fideus-labs/worker-pool'
+import type {
+  WorkerErrorEventLike,
+  WorkerLike,
+  WorkerMessageEventLike,
+  WorkerPoolProgressCallback,
+  WorkerPoolTask,
+} from '@fideus-labs/worker-pool'
 import type {
   ExecPickledRequest,
   ExecPickledResponse,
@@ -40,8 +46,8 @@ export interface PyodidePoolOptions {
    * URL of the built worker bundle (`dist/pyodide-worker.js`). Defaults to
    * `pyodide-worker.js` next to this module, which is correct for the built
    * `dist/index.js`. When running from source (tsx, vitest), pass an
-   * absolute `file://` URL instead: the `web-worker` polyfill resolves
-   * relative paths against `process.cwd()`, not the importing module.
+   * absolute `file://` URL instead: Node's worker_threads resolve a
+   * relative path against `process.cwd()`, not the importing module.
    */
   workerUrl?: string | URL
   /**
@@ -135,33 +141,6 @@ export class PyodideTaskError extends Error {
   }
 }
 
-type WorkerCtor = new (
-  url: string | URL,
-  options?: { type?: 'classic' | 'module'; name?: string },
-) => Worker
-
-let workerCtorPromise: Promise<WorkerCtor> | null = null
-
-/**
- * Browsers (and Deno) expose `Worker` globally; Node does not. Fall back to
- * the `web-worker` polyfill over worker_threads, imported dynamically so
- * this module stays platform-neutral and browser bundles never pull in the
- * polyfill.
- */
-function resolveWorkerCtor(): Promise<WorkerCtor> {
-  if (workerCtorPromise === null) {
-    workerCtorPromise = (async () => {
-      const globalWorker = (globalThis as { Worker?: unknown }).Worker
-      if (typeof globalWorker === 'function') {
-        return globalWorker as WorkerCtor
-      }
-      const polyfill = await import('web-worker')
-      return polyfill.default
-    })()
-  }
-  return workerCtorPromise
-}
-
 function unwrap<T>(response: WorkerResponse<T>): T {
   if (!response.ok) throw new PyodideTaskError(response.error)
   return response.result
@@ -172,7 +151,7 @@ function unwrapPickled(response: ExecPickledResponse): ArrayBuffer {
   return response.payload
 }
 
-function describeErrorEvent(event: ErrorEvent): string {
+function describeErrorEvent(event: WorkerErrorEventLike): string {
   if (typeof event.message === 'string' && event.message !== '') return event.message
   const error: unknown = event.error
   if (error instanceof Error) return error.message
@@ -192,7 +171,7 @@ export class PyodidePool {
   private readonly packages: string[]
   private readonly pyodideSource: PyodideSource | undefined
   /** Workers that fired an 'error' event; replaced instead of reused. */
-  private readonly deadWorkers = new WeakSet<Worker>()
+  private readonly deadWorkers = new WeakSet<WorkerLike>()
   private nextMessageId = 1
 
   constructor(options: PyodidePoolOptions) {
@@ -387,7 +366,7 @@ export class PyodidePool {
    * Wrap one exchange as a worker-pool task that never rejects for
    * protocol-level failures: errors ride back inside the resolved
    * `WorkerResponse` and are unwrapped only after the pool has recycled the
-   * worker (a rejected task would permanently shrink the pool).
+   * worker (a rejected task would cost its booted interpreter).
    */
   private protocolTask<T>(request: ExecRequest): WorkerPoolTask<WorkerResponse<T>> {
     return async (worker) => {
@@ -408,11 +387,6 @@ export class PyodidePool {
     }
   }
 
-  private async createWorker(): Promise<Worker> {
-    const Ctor = await resolveWorkerCtor()
-    return new Ctor(this.workerUrl, { type: 'module' })
-  }
-
   /**
    * One request/one response exchange, matched on the message `id` (the
    * worker never posts unsolicited messages). `R` is the response union for
@@ -422,29 +396,31 @@ export class PyodidePool {
    * hanging. `transfer` buffers are moved (not cloned) with the request.
    */
   private async exchange<R extends { id: number; ok: boolean }>(
-    worker: Worker | null,
+    worker: WorkerLike | null,
     request: WorkerRequest,
     transfer?: Transferable[],
-  ): Promise<{ worker: Worker; response: R | WorkerFailure }> {
+  ): Promise<{ worker: WorkerLike; response: R | WorkerFailure }> {
     let usable = worker
     if (usable !== null && this.deadWorkers.has(usable)) {
       usable.terminate()
       usable = null
     }
-    const target = usable ?? (await this.createWorker())
+    // A browser `Worker` where one exists globally, worker-pool's NodeWorker
+    // (node:worker_threads) otherwise.
+    const target = usable ?? createWorker(this.workerUrl)
     const response = await new Promise<R | WorkerFailure>((resolve) => {
       const settle = (value: R | WorkerFailure): void => {
         target.removeEventListener('message', onMessage)
         target.removeEventListener('error', onError)
         resolve(value)
       }
-      const onMessage = (event: MessageEvent): void => {
+      const onMessage = (event: WorkerMessageEventLike): void => {
         const data = event.data as R | null
         if (typeof data === 'object' && data !== null && data.id === request.id) {
           settle(data)
         }
       }
-      const onError = (event: ErrorEvent): void => {
+      const onError = (event: WorkerErrorEventLike): void => {
         this.deadWorkers.add(target)
         settle({
           id: request.id,
@@ -454,11 +430,7 @@ export class PyodidePool {
       }
       target.addEventListener('message', onMessage)
       target.addEventListener('error', onError)
-      if (transfer === undefined) {
-        target.postMessage(request)
-      } else {
-        target.postMessage(request, transfer)
-      }
+      target.postMessage(request, transfer)
     })
     return { worker: target, response }
   }

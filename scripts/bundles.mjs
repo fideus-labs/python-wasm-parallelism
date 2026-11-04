@@ -18,8 +18,8 @@
  *      ONE self-contained ESM file: the public API with worker-pool inlined
  *      AND the worker bundle embedded as a string (spawned via Blob URL), so
  *      it can be import()ed from contexts with no bundler — JupyterLite's
- *      Pyodide kernel worker. Only dynamic-import externals remain
- *      (`pyodide`, `web-worker`), neither of which loads in a browser.
+ *      Pyodide kernel worker. Only the dynamic-import external
+ *      `pyodide` remains, which never loads in a browser.
  */
 import { createRequire } from 'node:module'
 import path from 'node:path'
@@ -53,7 +53,7 @@ export function buildIndexBundle(options = {}) {
     ...shared,
     entryPoints: [path.join(rootDir, 'src', 'index.ts')],
     outfile: path.join(rootDir, 'dist', 'index.js'),
-    external: ['pyodide', '@fideus-labs/worker-pool', 'web-worker'],
+    external: ['pyodide', '@fideus-labs/worker-pool'],
     ...options,
   })
 }
@@ -74,7 +74,7 @@ export async function buildBrowserBundle(options = {}) {
     platform: 'browser',
     entryPoints: [path.join(rootDir, 'src', 'browser.ts')],
     outfile,
-    external: ['pyodide', 'web-worker'],
+    external: ['pyodide'],
     define: {
       __PYODIDE_WORKER_SOURCE__: JSON.stringify(workerSource),
       __PYODIDE_VERSION__: JSON.stringify(pyodideVersion),
