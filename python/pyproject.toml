@@ -5,14 +5,32 @@ build-backend = "hatchling.build"
 [project]
 name = "pyodide-pool"
 description = "Run Python callables and dask graphs on a pool of Pyodide Web Workers (driver-side API)"
+readme = "README.md"
 license = "MIT"
 requires-python = ">=3.11"
+keywords = ["pyodide", "webassembly", "wasm", "web-workers", "parallel", "dask", "jupyterlite"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: WebAssembly :: Emscripten",
+    "Framework :: Jupyter",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Topic :: Scientific/Engineering",
+    "Topic :: System :: Distributed Computing",
+]
 # cloudpickle is the wire format of every submitted task (_bridge); dask is
 # only needed for compute/get and stays an extra. Both resolve in Pyodide:
 # cloudpickle ships in the distribution, dask installs from PyPI via
 # micropip/piplite.
 dependencies = ["cloudpickle"]
 dynamic = ["version"]
+
+[project.urls]
+Homepage = "https://github.com/fideus-labs/python-wasm-parallelism"
+Demo = "https://fideus-labs.github.io/python-wasm-parallelism/"
+Issues = "https://github.com/fideus-labs/python-wasm-parallelism/issues"
 
 [project.optional-dependencies]
 dask = ["dask"]
