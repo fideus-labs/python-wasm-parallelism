@@ -6,14 +6,13 @@
 //      python/pyodide_pool/loader.py)
 //   2. the pyodide_pool and wasm_multiprocessing wheels (python/pyproject.toml
 //      and python/wasm_multiprocessing/pyproject.toml, built with uv)
-//      -> demos/jupyterlite/files/wheels/ (installed by the notebooks'
-//      first piplite cell; wasm_multiprocessing depends on pyodide_pool,
-//      which is not on PyPI, so the notebooks install the pool wheel first)
+//      -> demos/jupyterlite/files/wheels/ (checked by `npm run check:wheel`)
 //   3. the same wheels -> demos/jupyterlite/pypi/, where `jupyter lite build`
 //      indexes them into a local piplite index — so notebooks can
 //      `%pip install pyodide-pool` by NAME, which resolves correctly even
 //      when the site is hosted under a subpath (GitHub Pages), unlike the
-//      root-absolute /files/wheels/ URLs.
+//      root-absolute /files/wheels/ URLs. piplite prefers this index over
+//      PyPI, so the site runs this checkout's wheels, not the PyPI releases.
 //
 // All output directories are generated (gitignored); this script is the
 // only writer.

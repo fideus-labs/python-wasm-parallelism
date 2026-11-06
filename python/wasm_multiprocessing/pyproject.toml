@@ -5,14 +5,31 @@ build-backend = "hatchling.build"
 [project]
 name = "wasm-multiprocessing"
 description = "multiprocessing.Pool-compatible API over a pool of Pyodide Web Workers (driver-side shim)"
+readme = "README.md"
 license = "MIT"
 requires-python = ">=3.11"
+keywords = ["pyodide", "webassembly", "wasm", "web-workers", "parallel", "multiprocessing", "jupyterlite"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: WebAssembly :: Emscripten",
+    "Framework :: Jupyter",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Topic :: Scientific/Engineering",
+    "Topic :: System :: Distributed Computing",
+]
 # pyodide-pool is the single choke point for cloudpickle + JS bridging
 # (_bridge.submit / submit_batch); the shim adds no second copy — it only
-# needs cloudpickle itself for the pickle-by-value registration. pyodide-pool
-# is not on PyPI: install both wheels together (JupyterLite ships both).
+# needs cloudpickle itself for the pickle-by-value registration.
 dependencies = ["pyodide-pool", "cloudpickle"]
 dynamic = ["version"]
+
+[project.urls]
+Homepage = "https://github.com/fideus-labs/python-wasm-parallelism"
+Demo = "https://fideus-labs.github.io/python-wasm-parallelism/"
+Issues = "https://github.com/fideus-labs/python-wasm-parallelism/issues"
 
 [tool.hatch.version]
 path = "wasm_multiprocessing/__init__.py"
