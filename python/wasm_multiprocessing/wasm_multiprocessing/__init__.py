@@ -33,7 +33,7 @@ import cloudpickle
 
 from .pool import AsyncResult, Pool, TimeoutError, cpu_count
 
-__version__ = "0.1.0"
+__version__ = "0.1.1"
 
 __all__ = ["AsyncResult", "Pool", "TimeoutError", "cpu_count"]
 
