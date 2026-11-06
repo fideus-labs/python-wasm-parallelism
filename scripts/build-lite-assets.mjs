@@ -1,8 +1,8 @@
 // Build the JupyterLite payload, run by `npm run build:lite` ahead of
 // `jupyter lite build`:
 //
-//   1. the self-contained browser bundle -> demos/jupyterlite/files/assets/
-//      (import()ed from inside the Pyodide kernel worker by
+//   1. the self-contained browser bundle -> python/pyodide_pool/ (vendored
+//      into the wheel; import()ed from inside the Pyodide kernel worker by
 //      python/pyodide_pool/loader.py)
 //   2. the pyodide_pool and wasm_multiprocessing wheels (python/pyproject.toml
 //      and python/wasm_multiprocessing/pyproject.toml, built with uv)
@@ -23,11 +23,7 @@ import { buildBrowserBundle, rootDir } from './bundles.mjs'
 
 const liteFiles = path.join(rootDir, 'demos', 'jupyterlite', 'files')
 
-const { outfile } = await buildBrowserBundle({ logLevel: 'info' })
-const assetsDir = path.join(liteFiles, 'assets')
-mkdirSync(assetsDir, { recursive: true })
-copyFileSync(outfile, path.join(assetsDir, path.basename(outfile)))
-console.log(`copied ${path.basename(outfile)} -> demos/jupyterlite/files/assets/`)
+await buildBrowserBundle({ logLevel: 'info' })
 
 const wheelsDir = path.join(liteFiles, 'wheels')
 mkdirSync(wheelsDir, { recursive: true })

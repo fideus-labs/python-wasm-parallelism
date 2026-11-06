@@ -4,8 +4,9 @@
 //      no import map — the way JupyterLite's kernel worker will load it) and
 //      exposes the expected API.
 //   2. The built wheel (demos/jupyterlite/files/wheels/) installs via
-//      micropip into a bare Pyodide and pyodide_pool imports cleanly from
-//      site-packages, matching the wheel's version.
+//      micropip into a bare Pyodide, pyodide_pool imports cleanly from
+//      site-packages, matching the wheel's version, and create_pool loads
+//      the JS bundle vendored inside the wheel (no js_url).
 //
 // Prerequisites: `npm run build` (or build:lite) for the bundle, and
 // `node scripts/build-lite-assets.mjs` (or build:lite) for the wheel.
@@ -57,19 +58,17 @@ await micropip.install("emfs:/tmp/${wheelName}")
 
 import pyodide_pool
 from pyodide_pool import WorkerPool, compute, get, snapshot_packages, submit
-from pyodide_pool.loader import DEFAULT_JS_URL, create_pool
+from pyodide_pool.loader import create_pool
 
 json.dumps({
     "version": pyodide_pool.__version__,
     "installed_from": micropip.list()["pyodide-pool"].source,
-    "create_pool_is_coroutine": __import__("inspect").iscoroutinefunction(create_pool),
-    "default_js_url": DEFAULT_JS_URL,
+    "vendored_pool_size": (await create_pool(pool_size=2)).pool_size,
 })
 `),
 )
 check('micropip installs the wheel', summary.installed_from.endsWith('.whl'), wheelName)
 check('pyodide_pool imports from site-packages', summary.version === wheelVersion, `v${summary.version}`)
-check('loader.create_pool is an async function', summary.create_pool_is_coroutine === true)
-check('DEFAULT_JS_URL points at the site asset', summary.default_js_url === '/files/assets/pyodide-pool.browser.js')
+check('create_pool imports the JS bundle vendored in the wheel', summary.vendored_pool_size === 2)
 
 process.exit(failures === 0 ? 0 : 1)

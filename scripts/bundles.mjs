@@ -19,8 +19,12 @@
  *      AND the worker bundle embedded as a string (spawned via Blob URL), so
  *      it can be import()ed from contexts with no bundler — JupyterLite's
  *      Pyodide kernel worker. Only the dynamic-import external
- *      `pyodide` remains, which never loads in a browser.
+ *      `pyodide` remains, which never loads in a browser. Also copied into
+ *      python/pyodide_pool/ so the wheel vendors it (python/pyproject.toml
+ *      lists it as a build artifact) and loader.create_pool needs no
+ *      served asset.
  */
+import { copyFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -81,5 +85,6 @@ export async function buildBrowserBundle(options = {}) {
     },
     ...options,
   })
+  copyFileSync(outfile, path.join(rootDir, 'python', 'pyodide_pool', path.basename(outfile)))
   return { outfile, pyodideVersion }
 }

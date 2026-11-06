@@ -40,3 +40,7 @@ path = "pyodide_pool/__init__.py"
 
 [tool.hatch.build.targets.wheel]
 packages = ["pyodide_pool"]
+# Build output written by scripts/bundles.mjs and gitignored at the repo root.
+# Hatchling only reads a .gitignore inside this directory today, so the file
+# is included either way; naming it keeps the wheel whole if that changes.
+artifacts = ["pyodide_pool/pyodide-pool.browser.js"]

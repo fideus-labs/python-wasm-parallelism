@@ -36,8 +36,8 @@ value = await pyodide_pool.submit(fn, *args, **kwargs)  # one remote call
 total = await pyodide_pool.compute(dask.delayed(sum)([...]))  # dask collections
 ```
 
-`create_pool` loads the self-contained JS bundle from the JupyterLite site by
-default; pass `js_url=` to load it from elsewhere. A web app that embeds
+`create_pool` imports the self-contained JS bundle that ships inside the
+wheel; pass `js_url=` to load a hosted copy instead. A web app that embeds
 Pyodide can instead create the JS `PyodidePool` itself and register it with
 `pyodide.registerJsModule('js_pyodide_pool', { pool })`.
 
