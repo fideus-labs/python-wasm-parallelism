@@ -171,7 +171,10 @@ class WorkerPool:
 
         The call triple ships as a cloudpickle payload together with the
         driver's current package snapshot, so the worker mirrors the
-        driver's installed packages before executing.
+        driver's installed packages before executing. Where the runtime has
+        JSPI, the worker runs the call with stack switching: ``func`` may
+        block on an awaitable with ``pyodide.ffi.run_sync`` and may be a
+        coroutine function, whose awaited value is the result.
         """
         payload = _to_js_buffer(cloudpickle.dumps((func, args, kwargs)))
         packages, wheels = snapshot_packages()

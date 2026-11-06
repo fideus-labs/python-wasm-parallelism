@@ -178,13 +178,18 @@ json.dumps({"mapped": mapped, "rejected": rejected})
   }
 })
 
-it('sync map on flagless Node raises the guidance error (design-doc contract)', async () => {
+it('sync map blocks under JSPI and raises the guidance error without it', async () => {
   // docs/architecture/multiprocessing-shim-design.md commits sync methods to
   // capability detection: run_sync under JSPI, otherwise a RuntimeError
-  // naming the exact async replacement. Default (flagless) Node cannot stack
-  // switch, so this suite must see the error — if can_run_sync() ever flips
-  // true here, the environment changed and this assertion should be revisited.
-  const outcome = await run<{ can_run_sync: boolean; error_type: string; message: string }>(`
+  // naming the exact async replacement. Node 25+ stack-switches by default
+  // (24 only with --experimental-wasm-jspi), so both branches are contracts
+  // and the one that runs depends on the Node under test.
+  const outcome = await run<{
+    can_run_sync: boolean
+    error_type: string
+    message?: string
+    mapped?: number[]
+  }>(`
 import json
 from pyodide.ffi import can_run_sync
 from wasm_multiprocessing import Pool
@@ -195,7 +200,7 @@ def square(x):
 pool = Pool(2)
 outcome = {"can_run_sync": can_run_sync()}
 try:
-    pool.map(square, range(4))
+    outcome["mapped"] = pool.map(square, range(4))
     outcome["error_type"] = "<no exception>"
 except RuntimeError as exc:
     outcome["error_type"] = type(exc).__name__
@@ -203,10 +208,14 @@ except RuntimeError as exc:
 pool.close()
 json.dumps(outcome)
 `)
-  expect(outcome.can_run_sync).toBe(false)
-  expect(outcome.error_type).toBe('RuntimeError')
-  expect(outcome.message).toContain('await pool.amap(func, iterable)')
-  expect(outcome.message).toContain('JSPI')
+  if (outcome.can_run_sync) {
+    expect(outcome.error_type).toBe('<no exception>')
+    expect(outcome.mapped).toEqual([0, 1, 4, 9])
+  } else {
+    expect(outcome.error_type).toBe('RuntimeError')
+    expect(outcome.message).toContain('await pool.amap(func, iterable)')
+    expect(outcome.message).toContain('JSPI')
+  }
 })
 
 it('ports a stdlib multiprocessing snippet with an import change + awaited entry', async () => {

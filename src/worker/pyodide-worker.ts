@@ -65,6 +65,11 @@ export interface ExecRequest {
  * bypassing `exec`'s structured-clone conversion chain so arbitrary
  * picklable Python objects round-trip. Payload buffers ride the postMessage
  * transfer list in both directions (moved, not copied).
+ *
+ * Where the runtime has JSPI (Node 25+, Chrome 137+), the call runs with
+ * stack switching, so the task may block on an awaitable with
+ * `pyodide.ffi.run_sync` and may itself be a coroutine function: the shim
+ * finishes the coroutine and pickles its value.
  */
 export interface ExecPickledRequest {
   id: number
@@ -327,13 +332,19 @@ async function ensureWheels(py: PyodideAPI, wheels: string[]): Promise<void> {
  * re-raising. Returns [ok, resultBytes, formattedTraceback, exceptionBytes];
  * byte fields are JS Uint8Arrays built Python-side (JsBuffer.assign), so
  * their buffers are plain ArrayBuffers that are safe to transfer.
+ *
+ * A coroutine returned by the task is finished with run_sync, which is legal
+ * because the shim is entered through callPromising; without JSPI run_sync
+ * raises and the task fails with that message.
  */
 const RUN_PICKLED_SOURCE = `
 def _make_run_pickled():
+    import inspect
     import traceback
 
     import cloudpickle
     from js import Uint8Array
+    from pyodide.ffi import run_sync
 
     def _to_js_bytes(data):
         buffer = Uint8Array.new(len(data))
@@ -344,6 +355,8 @@ def _make_run_pickled():
         try:
             func, args, kwargs = cloudpickle.loads(payload.to_bytes())
             result = func(*args, **(kwargs or {}))
+            if inspect.isawaitable(result):
+                result = run_sync(result)
             return [True, _to_js_bytes(cloudpickle.dumps(result)), None, None]
         except BaseException as exc:
             formatted = "".join(traceback.format_exception(exc))
@@ -361,7 +374,16 @@ _make_run_pickled()
 `
 
 type PyListProxy = PyProxy & { get(index: number): unknown }
-type RunPickledShim = (payload: Uint8Array) => PyListProxy
+type RunPickledShim = ((payload: Uint8Array) => PyListProxy) & {
+  callPromising(payload: Uint8Array): Promise<PyListProxy>
+}
+
+/**
+ * Pyodide's own JSPI test: with it, `callPromising` runs a Python call with
+ * stack switching (`can_run_sync()` is true inside); without it, the method
+ * throws, so the shim is called plainly instead.
+ */
+const stackSwitching = 'Suspending' in WebAssembly || 'Suspender' in WebAssembly
 
 let runPickledShim: RunPickledShim | null = null
 
@@ -442,8 +464,9 @@ async function handleExecPickled(request: ExecPickledRequest): Promise<ExecPickl
     await ensureWheels(py, request.wheels)
   }
   const shim = await ensureRunPickledShim(py)
+  const payload = new Uint8Array(request.payload)
   const started = now()
-  const outcome = shim(new Uint8Array(request.payload))
+  const outcome = stackSwitching ? await shim.callPromising(payload) : shim(payload)
   const execMs = now() - started
   try {
     if (outcome.get(0) === true) {
