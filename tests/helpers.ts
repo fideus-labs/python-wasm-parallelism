@@ -125,7 +125,7 @@ export async function bootDriver(pool: PyodidePool): Promise<PyodideDriver> {
   await api.loadPackage(['cloudpickle', 'micropip'], { messageCallback: () => {} })
   api.FS.mkdirTree('/driver-site/pyodide_pool')
   for (const name of readdirSync(packageDir)) {
-    if (!name.endsWith('.py')) continue
+    if (!/\.(py|js)$/.test(name)) continue
     api.FS.writeFile(
       `/driver-site/pyodide_pool/${name}`,
       readFileSync(path.join(packageDir, name), 'utf8'),

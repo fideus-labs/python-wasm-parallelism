@@ -1,9 +1,10 @@
 /**
  * python/pyodide_pool/loader.py against the real browser bundle: a driver
  * Pyodide (Node main thread) imports the self-contained ESM file through
- * `run_js("import('<url>')")` — the exact mechanism JupyterLite notebooks
- * rely on — constructs the JS pool through its createPool export, and
- * installs the Python wrapper as the default pool. Task execution over
+ * `run_js` — the exact mechanism JupyterLite notebooks rely on, by default
+ * from a data: URL of the copy vendored in the package — constructs the JS
+ * pool through its createPool export, and installs the Python wrapper as
+ * the default pool. Task execution over
  * nested workers is browser-only (blob workers do not exist in
  * worker_threads) and is covered by the e2e suite instead.
  */
@@ -56,6 +57,15 @@ json.dumps({
   expect(outcome.pool_size).toBe(2)
   expect(outcome.is_default).toBe(true)
   expect(outcome.distinct_from_registered).toBe(true)
+})
+
+it('create_pool with no js_url imports the bundle vendored in the package', async () => {
+  const outcome = await driver.run<{ pool_size: number }>(`
+import json
+from pyodide_pool.loader import create_pool
+json.dumps({"pool_size": (await create_pool(pool_size=3)).pool_size})
+`)
+  expect(outcome.pool_size).toBe(3)
 })
 
 it('create_pool is re-exported lazily from the package root', async () => {
